@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Roommate Rent & Light Bill Tracker</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- QRCode.js for instant UPI QR generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- Razorpay Checkout for direct in-website payments -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <!-- Canvas Confetti for payment success animation -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+  <!-- Custom styles -->
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              100: '#dcfce7',
+              500: '#22c55e',
+              600: '#16a34a',
+              700: '#15803d',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen flex flex-col font-sans selection:bg-emerald-500 selection:text-white">
+
+  <!-- Header / Navigation -->
+  <header class="bg-white/80 backdrop-blur-md sticky top-0 z-40 border-b border-slate-200">
+    <div class="max-w-5xl mx-auto px-4 py-3 sm:px-6 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-md shadow-emerald-500/20">
+          <i data-lucide="home" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-slate-900 leading-tight" id="headerFlatName">Flat Rent & Bills</h1>
+          <p class="text-xs text-slate-500 font-medium" id="headerMonthBadge">Monthly Splitter</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <!-- Quick WhatsApp Share -->
+        <button id="whatsappShareBtn" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition border border-emerald-200">
+          <i data-lucide="share-2" class="w-4 h-4"></i>
+          <span class="hidden sm:inline">WhatsApp Group</span>
+        </button>
+
+        <!-- Admin Toggle Button -->
+        <button id="adminToggleBtn" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition border border-slate-300">
+          <i data-lucide="shield-check" class="w-4 h-4 text-emerald-600"></i>
+          <span id="adminToggleText">Admin Mode</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-grow max-w-5xl w-full mx-auto px-4 py-6 sm:px-6 space-y-6">
+
+    <!-- Cloud Sync / Notification Banner -->
+    <div id="syncBanner" class="hidden bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl flex items-center justify-between text-sm shadow-sm">
+      <div class="flex items-center gap-2">
+        <i data-lucide="check-circle-2" class="w-5 h-5 text-emerald-600"></i>
+        <span id="syncBannerMsg">Live bill data loaded from link!</span>
+      </div>
+      <button onclick="document.getElementById('syncBanner').classList.add('hidden')" class="text-emerald-700 hover:text-emerald-900 font-bold">&times;</button>
+    </div>
+
+    <!-- Month & Overview Card -->
+    <section class="bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white rounded-2xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
+      <!-- Decorative background blur -->
+      <div class="absolute -right-16 -top-16 w-56 h-56 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-700/60">
+        <div>
+          <span class="inline-block text-xs uppercase tracking-wider font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-2.5 py-1 rounded-full mb-2">
+            Active Billing Cycle
+          </span>
+          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight" id="activeMonthTitle">October 2026</h2>
+          <p class="text-slate-400 text-sm mt-0.5" id="dueDateNotice">Due by 5th of every month</p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <!-- Month Selector -->
+          <div class="bg-slate-800/80 border border-slate-700 rounded-xl px-3 py-2 flex items-center gap-2 text-sm">
+            <i data-lucide="calendar" class="w-4 h-4 text-emerald-400"></i>
+            <select id="monthSelect" class="bg-transparent text-white outline-none cursor-pointer text-sm font-medium">
+              <!-- Dynamically populated -->
+            </select>
+          </div>
+
+          <!-- Share Link Button -->
+          <button id="copyShareLinkBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 transition shadow-lg shadow-emerald-600/30">
+            <i data-lucide="link" class="w-4 h-4"></i>
+            <span>Share Link</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Overview Stats Grid -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 pt-6">
+        <div class="bg-slate-800/60 backdrop-blur-sm border border-slate-700/60 rounded-xl p-4">
+          <p class="text-xs text-slate-400 font-medium uppercase tracking-wide">Room Rent</p>
+          <p class="text-xl sm:text-2xl font-bold mt-1 text-white" id="statRentTotal">₹8,500</p>
+          <span class="text-[11px] text-slate-400">Fixed monthly</span>
+        </div>
+
+        <div class="bg-slate-800/60 backdrop-blur-sm border border-slate-700/60 rounded-xl p-4">
+          <p class="text-xs text-slate-400 font-medium uppercase tracking-wide">Maintenance & Cleaning</p>
+          <p class="text-xl sm:text-2xl font-bold mt-1 text-cyan-400" id="statMaintenanceTotal">₹1,000</p>
+          <span class="text-[11px] text-slate-400" id="statMaintenanceSubtext">₹500 bldg + ₹500 clean</span>
+        </div>
+
+        <div class="bg-slate-800/60 backdrop-blur-sm border border-slate-700/60 rounded-xl p-4">
+          <p class="text-xs text-slate-400 font-medium uppercase tracking-wide">Light / Electricity</p>
+          <p class="text-xl sm:text-2xl font-bold mt-1 text-amber-400" id="statLightTotal">₹0</p>
+          <span class="text-[11px] text-slate-400" id="statLightSubtext">Monthly bill</span>
+        </div>
+
+        <div class="bg-emerald-950/70 border border-emerald-700/60 rounded-xl p-4">
+          <p class="text-xs text-emerald-300 font-medium uppercase tracking-wide">Total Per Person</p>
+          <p class="text-xl sm:text-2xl font-extrabold mt-1 text-emerald-300" id="statPerPerson">₹0</p>
+          <span class="text-[11px] text-emerald-400" id="statRoommateCount">for 5 roommates</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Admin Panel (Shown when Admin Mode is enabled) -->
+    <section id="adminPanel" class="hidden bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
+      <div class="flex items-center justify-between pb-4 border-b border-slate-200">
+        <div class="flex items-center gap-2">
+          <div class="p-2 bg-emerald-100 text-emerald-700 rounded-lg">
+            <i data-lucide="settings" class="w-5 h-5"></i>
+          </div>
+          <div>
+            <h3 class="text-lg font-bold text-slate-900">Admin Control Panel</h3>
+            <p class="text-xs text-slate-500">Edit monthly bills, manage roommates, and record payments</p>
+          </div>
+        </div>
+        <button id="closeAdminBtn" class="text-xs text-slate-500 hover:text-slate-800 font-medium px-2.5 py-1.5 rounded-lg border border-slate-200">
+          Exit Admin
+        </button>
+      </div>
+
+      <!-- Bill Input Form -->
+      <form id="billForm" class="space-y-6">
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+          <!-- Room Rent -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Room Rent (₹)</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400 font-medium">₹</span>
+              <input type="number" id="inputRoomRent" min="0" step="10" placeholder="8500" required
+                     class="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1">Fixed monthly rent</p>
+          </div>
+
+          <!-- Building Maintenance -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Building Maintenance (₹)</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400 font-medium">₹</span>
+              <input type="number" id="inputBuildingMaint" min="0" step="10" placeholder="500" required
+                     class="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1">Society / flat maintenance</p>
+          </div>
+
+          <!-- Room Cleaning Maintenance -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Room Cleaning (₹)</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400 font-medium">₹</span>
+              <input type="number" id="inputCleaningMaint" min="0" step="10" placeholder="500" required
+                     class="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1">Room cleaning / maid</p>
+          </div>
+
+          <!-- Light Bill Mode -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs font-semibold text-slate-700">Light Bill (₹)</label>
+              <button type="button" id="toggleLightCalcBtn" class="text-[11px] text-emerald-600 hover:text-emerald-700 font-medium">
+                Unit Calc?
+              </button>
+            </div>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400 font-medium">₹</span>
+              <input type="number" id="inputLightBill" min="0" step="1" placeholder="Enter this month's bill" required
+                     class="w-full pl-8 pr-3 py-2 border border-amber-300 bg-amber-50/40 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-amber-700 font-medium mt-1">Enter new reading each month</p>
+          </div>
+        </div>
+
+        <!-- Light Bill Unit Calculator Dropdown (Collapsible) -->
+        <div id="lightCalcSection" class="hidden bg-slate-50 border border-slate-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Previous Meter Units</label>
+            <input type="number" id="calcPrevUnits" placeholder="1250" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Current Meter Units</label>
+            <input type="number" id="calcCurrUnits" placeholder="1410" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Rate per Unit (₹)</label>
+            <input type="number" id="calcRatePerUnit" placeholder="9" step="0.5" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm">
+          </div>
+          <div class="sm:col-span-3 flex justify-end">
+            <button type="button" id="applyLightCalcBtn" class="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-slate-700 transition">
+              Apply Calculated Bill
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <!-- UPI ID for collecting payments -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Your UPI ID (For Direct Payments)</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400"><i data-lucide="qr-code" class="w-4 h-4"></i></span>
+              <input type="text" id="inputUpiId" placeholder="8459807346@slc"
+                     class="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-slate-500 mt-1">Direct 0% fee bank transfer.</p>
+          </div>
+
+          <!-- Admin Phone for WhatsApp notifications -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Admin WhatsApp Number</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400"><i data-lucide="phone" class="w-4 h-4"></i></span>
+              <input type="tel" id="inputAdminPhone" placeholder="919876543210"
+                     class="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-slate-500 mt-1">Roommates can send payment proof directly here.</p>
+          </div>
+
+          <!-- Razorpay Key ID (Optional) -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Razorpay Key ID (Optional)</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400"><i data-lucide="credit-card" class="w-4 h-4"></i></span>
+              <input type="text" id="inputRazorpayKey" placeholder="rzp_test_... (Optional)"
+                     class="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-slate-500 mt-1">For cards/netbanking gateway checkout.</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <!-- Active Month Input -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Active Billing Month & Year</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400"><i data-lucide="calendar" class="w-4 h-4"></i></span>
+              <input type="text" id="inputAdminMonth" placeholder="e.g. October 2026" required
+                     class="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1">Changes the month across the entire site</p>
+          </div>
+
+          <!-- Due Date & Notes -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Due Date Notice Line</label>
+            <div class="relative">
+              <span class="absolute left-3 top-2.5 text-slate-400"><i data-lucide="clock" class="w-4 h-4"></i></span>
+              <input type="text" id="inputDueNote" placeholder="Due by 5th of every month" required
+                     class="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1">Changes "Due by 5th of every month" text</p>
+          </div>
+
+          <!-- Custom Admin PIN -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Admin PIN (Default: 1234)</label>
+            <input type="password" id="inputAdminPinChange" maxlength="6" placeholder="Change PIN (e.g. 1234)"
+                   class="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
+            <p class="text-[11px] text-slate-400 mt-1">Leave empty to keep existing PIN</p>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-3 border-t border-slate-200">
+          <button type="button" id="manageRoommatesModalBtn" class="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center gap-1.5">
+            <i data-lucide="users" class="w-4 h-4 text-emerald-600"></i>
+            Manage Roommate List (<span id="adminRoommateCount">0</span>)
+          </button>
+
+          <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-xl text-sm font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-2">
+            <i data-lucide="save" class="w-4 h-4"></i>
+            Save Month Bills
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Roommates Bill & Payment Status List -->
+    <section class="space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <h3 class="text-lg font-bold text-slate-900 flex items-center gap-2">
+            <i data-lucide="users" class="w-5 h-5 text-emerald-600"></i>
+            Roommates Breakdown & Status
+          </h3>
+          <p class="text-xs text-slate-500">Check your share and pay online with UPI</p>
+        </div>
+
+        <!-- Paid / Pending Summary Counter -->
+        <div class="flex items-center gap-2 text-xs font-semibold">
+          <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200" id="badgePaidCount">0 Paid</span>
+          <span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200" id="badgePendingCount">0 Pending</span>
+        </div>
+      </div>
+
+      <!-- Roommates Cards Grid -->
+      <div id="roommateListContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Roommate cards inserted dynamically -->
+      </div>
+    </section>
+
+    <!-- Bill Details Breakdown Card -->
+    <section class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+      <h3 class="text-base font-bold text-slate-900 mb-4 flex items-center gap-2">
+        <i data-lucide="receipt" class="w-4 h-4 text-emerald-600"></i>
+        Detailed Bill Breakdown (<span id="breakdownMonth">October 2026</span>)
+      </h3>
+
+      <div class="divide-y divide-slate-100 text-sm">
+        <div class="py-2.5 flex items-center justify-between">
+          <span class="text-slate-600">1. Room Rent</span>
+          <span class="font-semibold text-slate-900" id="detailRent">₹8,500</span>
+        </div>
+        <div class="py-2.5 flex items-center justify-between">
+          <span class="text-slate-600">2. Building Maintenance</span>
+          <span class="font-semibold text-slate-900" id="detailBuildingMaint">₹500</span>
+        </div>
+        <div class="py-2.5 flex items-center justify-between">
+          <span class="text-slate-600">3. Room Cleaning Maintenance</span>
+          <span class="font-semibold text-slate-900" id="detailCleaningMaint">₹500</span>
+        </div>
+        <div class="py-2.5 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-slate-600">4. Light / Electricity Bill</span>
+            <span class="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold">Monthly Meter</span>
+          </div>
+          <span class="font-semibold text-amber-600" id="detailLight">₹0</span>
+        </div>
+        <div class="py-3 flex items-center justify-between font-bold text-slate-900 bg-slate-50 px-3 rounded-lg mt-2">
+          <span>Total Month Bill</span>
+          <span class="text-base text-emerald-700" id="detailGrandTotal">₹9,500</span>
+        </div>
+        <div class="py-3 flex items-center justify-between font-bold text-slate-900 px-3">
+          <span>Split per Roommate (5 Flatmates)</span>
+          <span class="text-base text-emerald-600" id="detailSplitPerHead">₹1,900 / head</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hosting & How-it-works footer tips -->
+    <section class="bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-sky-500/10 border border-emerald-200 rounded-2xl p-5 text-xs text-slate-600 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+      <div class="space-y-1">
+        <p class="font-bold text-slate-800 flex items-center gap-1.5">
+          <i data-lucide="sparkles" class="w-4 h-4 text-emerald-600"></i>
+          How Roommates Can Check From Their Phones:
+        </p>
+        <p>1. Update the bills above &rarr; 2. Click <strong>Share Link</strong> or <strong>WhatsApp Group</strong> &rarr; 3. Roommates open the link and scan UPI QR code to pay!</p>
+      </div>
+      <button id="viewHostingGuideBtn" class="shrink-0 px-3 py-1.5 bg-white border border-slate-300 hover:border-slate-400 text-slate-800 font-semibold rounded-lg shadow-sm transition">
+        Free Hosting Guide 🚀
+      </button>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-200 bg-white py-4 text-center text-xs text-slate-400 mt-10">
+    <p>Roommate Rent & Light Bill Splitter &bull; 100% Free & Open Source &bull; Works on any phone</p>
+  </footer>
+
+  <!-- ================= MODALS ================= -->
+
+  <!-- 1. In-Website Checkout & Payment Modal -->
+  <div id="checkoutModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-scale-in max-h-[92vh] flex flex-col">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div>
+          <span class="text-[11px] font-semibold text-emerald-600 uppercase tracking-wider">Direct Checkout</span>
+          <h4 class="font-bold text-slate-900 text-base" id="checkoutModalName">Pay Rent & Bill</h4>
+        </div>
+        <button onclick="document.getElementById('checkoutModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 font-bold text-lg">&times;</button>
+      </div>
+
+      <!-- Amount Banner -->
+      <div class="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200/80 rounded-xl p-4 flex items-center justify-between">
+        <div>
+          <p class="text-xs text-emerald-800 font-medium">Total Share Due</p>
+          <p class="text-2xl font-black text-emerald-700" id="checkoutModalAmount">₹0</p>
+        </div>
+        <div class="text-right">
+          <span class="text-[11px] font-semibold text-slate-500 block" id="checkoutModalMonth">October 2026</span>
+          <span class="text-[10px] text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full font-bold">100% Secure</span>
+        </div>
+      </div>
+
+      <!-- Payment Method Tabs -->
+      <div class="flex border-b border-slate-200 text-xs font-semibold">
+        <button id="tabUpiBtn" class="flex-1 py-2 text-emerald-700 border-b-2 border-emerald-600 flex items-center justify-center gap-1.5 transition">
+          <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-500"></i>
+          <span>Instant UPI (0% Fee)</span>
+        </button>
+        <button id="tabGatewayBtn" class="flex-1 py-2 text-slate-500 hover:text-slate-700 flex items-center justify-center gap-1.5 transition">
+          <i data-lucide="credit-card" class="w-3.5 h-3.5 text-blue-500"></i>
+          <span>Card / NetBanking / Gateway</span>
+        </button>
+      </div>
+
+      <!-- Tab Content Area -->
+      <div class="flex-1 overflow-y-auto pr-1 space-y-4">
+        
+        <!-- Tab 1: Instant UPI -->
+        <div id="tabContentUpi" class="space-y-4">
+          <!-- Direct Mobile 1-Tap Auto-Launch Button -->
+          <div class="space-y-2">
+            <a id="btnPayDirectAll" href="#" class="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black rounded-xl text-sm transition shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2">
+              <i data-lucide="smartphone" class="w-5 h-5 text-amber-300"></i>
+              <span id="btnPayDirectAllText">⚡ Open UPI App on My Phone</span>
+            </a>
+            <p class="text-[11px] text-center text-slate-500 font-medium">Automatically opens Google Pay, PhonePe, Paytm, or BHIM</p>
+          </div>
+
+          <!-- Specific Mobile UPI App Choices -->
+          <div class="space-y-1.5">
+            <p class="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Or Select Specific App:</p>
+            <div class="grid grid-cols-3 gap-2">
+              <a id="btnPayGPay" href="#" class="p-2.5 border border-slate-200 hover:border-emerald-500 rounded-xl text-center bg-slate-50 hover:bg-emerald-50 transition flex flex-col items-center">
+                <span class="text-xs font-bold text-slate-900">Google Pay</span>
+                <span class="text-[10px] text-emerald-600 font-semibold">GPay</span>
+              </a>
+              <a id="btnPayPhonePe" href="#" class="p-2.5 border border-slate-200 hover:border-purple-500 rounded-xl text-center bg-slate-50 hover:bg-purple-50 transition flex flex-col items-center">
+                <span class="text-xs font-bold text-purple-700">PhonePe</span>
+                <span class="text-[10px] text-purple-600 font-semibold">Direct</span>
+              </a>
+              <a id="btnPayPaytm" href="#" class="p-2.5 border border-slate-200 hover:border-sky-500 rounded-xl text-center bg-slate-50 hover:bg-sky-50 transition flex flex-col items-center">
+                <span class="text-xs font-bold text-sky-600">Paytm</span>
+                <span class="text-[10px] text-sky-600 font-semibold">UPI</span>
+              </a>
+            </div>
+          </div>
+
+          <!-- Slice QR Code for scanning -->
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+              <p class="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Option B: Scan Slice QR Code</p>
+              <span class="text-[10px] bg-purple-100 text-purple-700 font-extrabold px-2 py-0.5 rounded-full">Official Slice QR</span>
+            </div>
+            <div class="bg-white border-2 border-purple-200 rounded-2xl p-4 flex flex-col items-center shadow-sm">
+              <img id="sliceQrImg" src="slice-qr.jpeg" alt="Slice UPI QR Code - Kalpesh Prakash Bagul"
+                   onerror="this.style.display='none'; document.getElementById('qrcodeContainer').classList.remove('hidden');"
+                   class="w-52 h-auto max-h-64 object-contain rounded-xl shadow-sm border border-slate-100 mb-2">
+              <div class="flex items-center gap-2 mt-1">
+                <span class="text-xs text-purple-950 font-mono font-bold" id="checkoutModalUpiId">8459807346@slc</span>
+                <button id="copyUpiIdBtn" class="text-[11px] text-purple-600 hover:text-purple-800 font-semibold underline">Copy</button>
+              </div>
+              <p class="text-[10px] text-slate-500 font-medium mt-1">Account holder: MR KALPESH PRAKASH BAGUL</p>
+              <!-- Dynamically generated QR code fallback if image is missing -->
+              <div id="qrcodeContainer" class="hidden p-2 bg-white rounded-lg shadow-sm mt-2"></div>
+            </div>
+          </div>
+
+          <!-- Step 2: Confirm Payment & Enter UTR -->
+          <div class="bg-amber-50 border border-amber-200/80 rounded-xl p-3.5 space-y-2.5">
+            <div class="flex items-start gap-2">
+              <i data-lucide="check-circle" class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5"></i>
+              <div>
+                <p class="text-xs font-bold text-slate-900">Step 2: Submit Payment Confirmation</p>
+                <p class="text-[11px] text-slate-600">Enter the 12-digit UTR / UPI Reference No. from your bank app:</p>
+              </div>
+            </div>
+
+            <form id="utrConfirmForm" class="space-y-2">
+              <div class="relative">
+                <input type="text" id="inputUtrNumber" maxlength="16" placeholder="e.g. 428910293819 (12 digits)" required
+                       class="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+              </div>
+
+              <button type="submit" class="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition shadow-md shadow-emerald-600/20 flex items-center justify-center gap-1.5">
+                <i data-lucide="shield-check" class="w-4 h-4"></i>
+                Confirm Payment & Generate Receipt
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Tab 2: Payment Gateway (Cards, NetBanking, Razorpay) -->
+        <div id="tabContentGateway" class="hidden space-y-4">
+          <div class="p-4 border border-blue-200 bg-blue-50/50 rounded-xl space-y-3">
+            <div class="flex items-center gap-2">
+              <i data-lucide="credit-card" class="w-5 h-5 text-blue-600"></i>
+              <h5 class="font-bold text-slate-900 text-sm">Online Gateway Payment</h5>
+            </div>
+            <p class="text-xs text-slate-600">
+              Pay securely directly on this page using Credit/Debit Cards, NetBanking, Wallets, or UPI through Razorpay.
+            </p>
+            <div class="flex flex-wrap gap-2 text-[11px] text-slate-500 pt-1">
+              <span class="bg-white px-2 py-1 rounded border border-slate-200 font-medium">Visa</span>
+              <span class="bg-white px-2 py-1 rounded border border-slate-200 font-medium">Mastercard</span>
+              <span class="bg-white px-2 py-1 rounded border border-slate-200 font-medium">RuPay</span>
+              <span class="bg-white px-2 py-1 rounded border border-slate-200 font-medium">NetBanking</span>
+            </div>
+          </div>
+
+          <button id="btnLaunchRazorpay" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-md shadow-blue-600/20 flex items-center justify-center gap-2">
+            <i data-lucide="lock" class="w-4 h-4"></i>
+            <span id="btnLaunchRazorpayText">Pay with Razorpay Checkout</span>
+          </button>
+          <p class="text-[10px] text-center text-slate-400">256-bit SSL encrypted online payment</p>
+        </div>
+
+      </div>
+
+      <!-- Close button -->
+      <div class="pt-2 border-t border-slate-100">
+        <button onclick="document.getElementById('checkoutModal').classList.add('hidden')" class="w-full py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-xl text-xs font-semibold">
+          Cancel / Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Digital Rent Receipt Modal -->
+  <div id="receiptModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-scale-in">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
+            <i data-lucide="receipt" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h4 class="font-bold text-slate-900 text-sm">Payment Receipt</h4>
+            <p class="text-[10px] text-slate-400" id="receiptNumber">REC-2026-001</p>
+          </div>
+        </div>
+        <button onclick="document.getElementById('receiptModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 font-bold text-lg">&times;</button>
+      </div>
+
+      <!-- Receipt Content Card -->
+      <div class="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-4 space-y-3 text-xs">
+        <div class="text-center py-1 border-b border-slate-200">
+          <span class="inline-block px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-[11px] mb-1">
+            PAID IN FULL &#10004;
+          </span>
+          <p class="text-2xl font-black text-slate-900 mt-1" id="receiptAmount">₹0</p>
+          <p class="text-[11px] text-slate-500 font-medium" id="receiptMonthYear">October 2026</p>
+        </div>
+
+        <div class="space-y-1.5 text-slate-600">
+          <div class="flex justify-between">
+            <span>Roommate Name:</span>
+            <span class="font-bold text-slate-900" id="receiptRoommateName">-</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Paid To (Flat):</span>
+            <span class="font-semibold text-slate-900" id="receiptFlatName">-</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Payment Method:</span>
+            <span class="font-semibold text-slate-900" id="receiptPaymentMode">UPI Transfer</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Transaction Ref / UTR:</span>
+            <span class="font-mono text-[11px] text-emerald-700 font-bold" id="receiptUtr">-</span>
+          </div>
+          <div class="flex justify-between">
+            <span>Date & Time:</span>
+            <span class="text-slate-700" id="receiptDateTime">-</span>
+          </div>
+          <!-- Detailed Expense Breakdown in Receipt -->
+          <div class="pt-2 mt-1 border-t border-slate-200 space-y-1 text-[11px] text-slate-500">
+            <div class="flex justify-between">
+              <span>Room Rent:</span>
+              <span class="font-medium text-slate-700" id="receiptRentBreakdown">₹8,500</span>
+            </div>
+            <div class="flex justify-between">
+              <span>Bldg Maintenance:</span>
+              <span class="font-medium text-slate-700" id="receiptBldgBreakdown">₹500</span>
+            </div>
+            <div class="flex justify-between">
+              <span>Room Cleaning:</span>
+              <span class="font-medium text-slate-700" id="receiptCleanBreakdown">₹500</span>
+            </div>
+            <div class="flex justify-between">
+              <span>Light Bill:</span>
+              <span class="font-medium text-slate-700" id="receiptLightBreakdown">₹0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="space-y-2 pt-1">
+        <button id="sendProofWhatsAppBtn" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition shadow-md shadow-emerald-600/20 flex items-center justify-center gap-1.5">
+          <i data-lucide="share-2" class="w-4 h-4"></i>
+          Send Receipt to Admin on WhatsApp
+        </button>
+
+        <button onclick="window.print()" class="w-full py-2 border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5">
+          <i data-lucide="printer" class="w-3.5 h-3.5"></i>
+          Print / Save PDF Receipt
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Admin PIN Modal -->
+  <div id="adminPinModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-xs w-full p-6 text-center space-y-4 shadow-2xl">
+      <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+        <i data-lucide="lock" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h4 class="font-bold text-slate-900 text-base">Enter Admin PIN</h4>
+        <p class="text-xs text-slate-500 mt-0.5">Only room admin can edit bills and status (Default PIN: <strong>1234</strong>)</p>
+      </div>
+      <input type="password" id="adminPinInput" maxlength="6" placeholder="PIN" autofocus
+             class="w-full text-center tracking-widest text-xl font-bold py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none">
+      <div id="adminPinError" class="text-xs text-red-500 font-medium hidden">Incorrect PIN. Try 1234.</div>
+      <div class="flex gap-2">
+        <button onclick="document.getElementById('adminPinModal').classList.add('hidden')" class="w-1/2 py-2 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold">
+          Cancel
+        </button>
+        <button id="adminPinSubmitBtn" class="w-1/2 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition">
+          Unlock
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Roommate Management Modal -->
+  <div id="roommatesModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-200">
+        <h4 class="font-bold text-slate-900 text-base flex items-center gap-2">
+          <i data-lucide="users" class="w-5 h-5 text-emerald-600"></i>
+          Manage Roommates
+        </h4>
+        <button onclick="document.getElementById('roommatesModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 font-bold text-lg">&times;</button>
+      </div>
+
+      <!-- Add Roommate Input -->
+      <form id="addRoommateForm" class="flex gap-2">
+        <input type="text" id="newRoommateName" placeholder="Roommate Name (e.g. Rahul)" required
+               class="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-500">
+        <button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 transition flex items-center gap-1">
+          <i data-lucide="user-plus" class="w-4 h-4"></i>
+          Add
+        </button>
+      </form>
+
+      <!-- Roommates List -->
+      <div id="manageRoommatesList" class="flex-1 overflow-y-auto space-y-2 divide-y divide-slate-100 pr-1">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <div class="pt-3 border-t border-slate-200 flex justify-end">
+        <button onclick="document.getElementById('roommatesModal').classList.add('hidden')" class="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-semibold">
+          Done
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Hosting Guide Modal -->
+  <div id="hostingGuideModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-200">
+        <h4 class="font-bold text-slate-900 text-base flex items-center gap-2">
+          <i data-lucide="cloud-upload" class="w-5 h-5 text-emerald-600"></i>
+          How to Host for Free (in 2 Minutes)
+        </h4>
+        <button onclick="document.getElementById('hostingGuideModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 font-bold text-lg">&times;</button>
+      </div>
+
+      <div class="space-y-4 text-xs text-slate-600">
+        <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 space-y-1.5">
+          <p class="font-bold text-emerald-900 text-sm flex items-center gap-1.5">
+            <span class="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[11px]">1</span>
+            Method 1: Netlify Drop (Easiest - No Login / No Git)
+          </p>
+          <ol class="list-decimal list-inside space-y-1 text-emerald-800 ml-1">
+            <li>Open <a href="https://app.netlify.com/drop" target="_blank" class="underline font-bold text-emerald-700">app.netlify.com/drop</a> in your browser.</li>
+            <li>Drag & drop the entire <code>roommate-rent-tracker</code> folder into the browser.</li>
+            <li>Your site is live instantly with an SSL link like <code>https://my-room-rent.netlify.app</code>!</li>
+          </ol>
+        </div>
+
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1.5">
+          <p class="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+            <span class="w-5 h-5 rounded-full bg-slate-800 text-white flex items-center justify-center text-[11px]">2</span>
+            Method 2: Vercel (Fast & Free)
+          </p>
+          <ol class="list-decimal list-inside space-y-1 text-slate-700 ml-1">
+            <li>Visit <a href="https://vercel.com" target="_blank" class="underline font-bold text-slate-800">vercel.com</a> and sign in with GitHub or Google.</li>
+            <li>Deploy by importing a GitHub repository or drag-and-drop.</li>
+            <li>Get a free <code>.vercel.app</code> domain forever!</li>
+          </ol>
+        </div>
+
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1.5">
+          <p class="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+            <span class="w-5 h-5 rounded-full bg-slate-800 text-white flex items-center justify-center text-[11px]">3</span>
+            Method 3: GitHub Pages
+          </p>
+          <ol class="list-decimal list-inside space-y-1 text-slate-700 ml-1">
+            <li>Create a free repository at <a href="https://github.com/new" target="_blank" class="underline font-bold text-slate-800">github.com/new</a>.</li>
+            <li>Upload <code>index.html</code>, <code>styles.css</code>, and <code>app.js</code>.</li>
+            <li>Go to <strong>Settings &rarr; Pages</strong>, select <code>main</code> branch and click Save.</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="pt-3 border-t border-slate-200 flex justify-end">
+        <button onclick="document.getElementById('hostingGuideModal').classList.add('hidden')" class="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-semibold">
+          Got it!
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

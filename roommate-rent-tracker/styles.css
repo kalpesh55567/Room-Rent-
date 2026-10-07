@@ -1,0 +1,67 @@
+/* Custom Styles for Roommate Rent & Light Bill Tracker */
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Print styling for receipts */
+@media print {
+  /* Hide all main UI elements when printing */
+  header, main, footer, #checkoutModal, #adminPinModal, #roommatesModal, #hostingGuideModal {
+    display: none !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+    margin: 0 !important;
+    padding: 20px !important;
+  }
+
+  #receiptModal {
+    position: static !important;
+    background: white !important;
+    display: block !important;
+    padding: 0 !important;
+  }
+
+  #receiptModal > div {
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: 1px solid #e2e8f0 !important;
+  }
+
+  #receiptModal button {
+    display: none !important;
+  }
+}
