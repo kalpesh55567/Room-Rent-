@@ -5,12 +5,12 @@
   'use strict';
 
   // Incremented storage key to cleanly load user's new rates & 5 roommates
-  const STORAGE_KEY = 'roommate_rent_tracker_v4';
-  const DEFAULT_PIN = '1234';
+  const STORAGE_KEY = 'roommate_rent_tracker_v5';
+  const DEFAULT_PIN = '8459';
 
   // Exact data configured: Rent 8500, Bldg Maint 500, Room Cleaning 500, Light bill dynamic input
   const defaultData = {
-    flatName: 'Flat Bills',
+    flatName: 'ROOM NO 12',
     activeMonth: 'October 2026',
     dueNote: 'Due by 5th of every month',
     upiId: '8459807346@slc',
@@ -36,7 +36,17 @@
     history: []
   };
 
+  // Authorized Roommate Accounts
+  const AUTH_USERS = [
+    { id: 'chirag', display: 'Chirag', pass: 'chirag', roommateId: '4' },
+    { id: 'harshal', display: 'Harshal', pass: 'harshal', roommateId: '1' },
+    { id: 'chetan', display: 'Chetan', pass: 'chetan', roommateId: '3' },
+    { id: 'onkar', display: 'Onkar', pass: 'onkar', roommateId: '5' },
+    { id: 'kalpesh', display: 'Kalpesh', pass: 'kalpesh', roommateId: '2', isAdmin: true }
+  ];
+
   let appState = loadState();
+  let currentLoggedInUser = null;
   let isAdminAuthenticated = false;
   let activePayingRoommate = null;
   let activeReceiptRoommate = null;
@@ -73,6 +83,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     checkUrlForSharedData();
     initMonthSelector();
+    initAuth();
     renderAll();
     setupEventListeners();
   });
@@ -80,12 +91,20 @@
   // Load state from URL hash or LocalStorage
   function loadState() {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('roommate_rent_tracker_v4');
       if (stored) {
         const parsed = JSON.parse(stored);
+        if (parsed.adminPin === '1234' || !parsed.adminPin) {
+          parsed.adminPin = DEFAULT_PIN;
+        }
+        if (parsed.flatName === 'Flat Bills' || !parsed.flatName) {
+          parsed.flatName = 'ROOM NO 12';
+        }
         return {
           ...defaultData,
           ...parsed,
+          flatName: (parsed.flatName === 'Flat Bills' || !parsed.flatName) ? 'ROOM NO 12' : parsed.flatName,
+          adminPin: parsed.adminPin === '1234' ? DEFAULT_PIN : (parsed.adminPin || DEFAULT_PIN),
           bill: { ...defaultData.bill, ...(parsed.bill || {}) },
           roommates: Array.isArray(parsed.roommates) && parsed.roommates.length > 0 ? parsed.roommates : defaultData.roommates
         };
@@ -136,6 +155,117 @@
       console.warn('Could not parse shared link data:', err);
     }
   }
+
+  // Authentication & Session Management
+  function initAuth() {
+    try {
+      const stored = localStorage.getItem('roommate_logged_in_user');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.id) {
+          const matched = AUTH_USERS.find(u => u.id.toLowerCase() === parsed.id.toLowerCase());
+          if (matched) {
+            currentLoggedInUser = matched;
+            const loginScreen = document.getElementById('loginScreen');
+            if (loginScreen) loginScreen.classList.add('hidden');
+            updateUserHeaderBadge();
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Error restoring user session:', e);
+    }
+
+    // Default: Show login screen if not authenticated
+    const loginScreen = document.getElementById('loginScreen');
+    if (loginScreen) loginScreen.classList.remove('hidden');
+    updateUserHeaderBadge();
+  }
+
+  function handleLogin(username, password) {
+    const cleanUser = (username || '').trim().toLowerCase();
+    const cleanPass = (password || '').trim();
+
+    const matched = AUTH_USERS.find(u =>
+      (u.id.toLowerCase() === cleanUser || u.display.toLowerCase() === cleanUser) &&
+      (u.pass === cleanPass || u.pass.toLowerCase() === cleanPass.toLowerCase())
+    );
+
+    if (matched) {
+      currentLoggedInUser = matched;
+      localStorage.setItem('roommate_logged_in_user', JSON.stringify({
+        id: matched.id,
+        display: matched.display,
+        roommateId: matched.roommateId,
+        isAdmin: !!matched.isAdmin
+      }));
+
+      const loginScreen = document.getElementById('loginScreen');
+      if (loginScreen) loginScreen.classList.add('hidden');
+
+      const errorMsg = document.getElementById('loginErrorMsg');
+      if (errorMsg) errorMsg.classList.add('hidden');
+
+      updateUserHeaderBadge();
+      renderAll();
+      showToast(`Welcome back, ${matched.display}!`);
+      return true;
+    } else {
+      const errorMsg = document.getElementById('loginErrorMsg');
+      if (errorMsg) errorMsg.classList.remove('hidden');
+      return false;
+    }
+  }
+
+  function handleLogout() {
+    currentLoggedInUser = null;
+    localStorage.removeItem('roommate_logged_in_user');
+    isAdminAuthenticated = false;
+
+    const loginScreen = document.getElementById('loginScreen');
+    if (loginScreen) {
+      loginScreen.classList.remove('hidden');
+      const passField = document.getElementById('loginPassword');
+      if (passField) passField.value = '';
+    }
+
+    const adminPanel = document.getElementById('adminPanel');
+    if (adminPanel) adminPanel.classList.add('hidden');
+
+    updateUserHeaderBadge();
+    renderAll();
+    showToast('Logged out successfully.');
+  }
+
+  function updateUserHeaderBadge() {
+    const userBadge = document.getElementById('userBadge');
+    const loggedInUserName = document.getElementById('loggedInUserName');
+    if (!userBadge || !loggedInUserName) return;
+
+    if (currentLoggedInUser) {
+      loggedInUserName.textContent = currentLoggedInUser.display;
+      userBadge.classList.remove('hidden');
+    } else {
+      userBadge.classList.add('hidden');
+    }
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  window.selectLoginUser = function (name) {
+    const userField = document.getElementById('loginUsername');
+    const passField = document.getElementById('loginPassword');
+    const err = document.getElementById('loginErrorMsg');
+    if (err) err.classList.add('hidden');
+
+    if (userField) {
+      userField.value = name;
+    }
+    if (passField) {
+      passField.focus();
+    }
+  };
 
   // Generate URL that encodes full current state
   function getShareableUrl() {
@@ -335,15 +465,23 @@
 
       const upiUri = buildUpiUri(perHead, r.name);
 
+      const isCurrentUser = currentLoggedInUser && (
+        r.name.toLowerCase().includes(currentLoggedInUser.display.toLowerCase()) ||
+        currentLoggedInUser.display.toLowerCase().includes(r.name.toLowerCase())
+      );
+
       return `
-        <div class="bg-white border ${isPaid ? 'border-slate-200' : 'border-amber-200/80 shadow-sm'} rounded-2xl p-5 flex flex-col justify-between transition hover:shadow-md">
+        <div class="bg-white border ${isCurrentUser ? 'border-emerald-500 ring-2 ring-emerald-500/30 shadow-md' : (isPaid ? 'border-slate-200' : 'border-amber-200/80 shadow-sm')} rounded-2xl p-5 flex flex-col justify-between transition hover:shadow-md">
           <div class="flex items-start justify-between gap-3">
             <div class="flex items-center gap-3">
-              <div class="w-11 h-11 rounded-xl ${isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'} font-bold flex items-center justify-center text-sm shadow-sm">
+              <div class="w-11 h-11 rounded-xl ${isCurrentUser ? 'bg-emerald-600 text-white shadow-emerald-500/30' : (isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')} font-bold flex items-center justify-center text-sm shadow-sm">
                 ${r.name.charAt(0).toUpperCase()}
               </div>
               <div>
-                <h4 class="font-bold text-slate-900 text-base leading-tight">${escapeHtml(r.name)}</h4>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <h4 class="font-bold text-slate-900 text-base leading-tight">${escapeHtml(r.name)}</h4>
+                  ${isCurrentUser ? '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">You</span>' : ''}
+                </div>
                 <div class="mt-1">${statusBadge}</div>
               </div>
             </div>
@@ -697,6 +835,38 @@
 
       window.open(targetUrl, '_blank');
     });
+
+    // Login Form Submit
+    const loginForm = document.getElementById('loginForm');
+    if (loginForm) {
+      loginForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const u = document.getElementById('loginUsername').value;
+        const p = document.getElementById('loginPassword').value;
+        handleLogin(u, p);
+      });
+    }
+
+    // Toggle Login Password Visibility
+    const toggleLoginPassBtn = document.getElementById('toggleLoginPasswordBtn');
+    if (toggleLoginPassBtn) {
+      toggleLoginPassBtn.addEventListener('click', () => {
+        const pass = document.getElementById('loginPassword');
+        if (pass) {
+          pass.type = pass.type === 'password' ? 'text' : 'password';
+        }
+      });
+    }
+
+    // Logout Button
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) {
+      logoutBtn.addEventListener('click', () => {
+        if (confirm('Are you sure you want to log out?')) {
+          handleLogout();
+        }
+      });
+    }
   }
 
   // Handle click on Roommate card: on mobile, auto-redirects directly to UPI app!
