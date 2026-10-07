@@ -15,7 +15,7 @@
   <!-- Canvas Confetti for payment success animation -->
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
   <!-- Custom styles -->
-  <link rel="stylesheet" href="styles.css?v=4.6">
+  <link rel="stylesheet" href="styles.css?v=4.7">
   <script>
     tailwind.config = {
       darkMode: 'class',
@@ -374,18 +374,36 @@
 
           <!-- Custom Admin PIN -->
           <div>
-            <label class="block text-xs font-semibold text-slate-700 mb-1">Admin PIN (Default: 8459)</label>
-            <input type="password" id="inputAdminPinChange" maxlength="6" placeholder="Change PIN (e.g. 8459)"
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Admin PIN</label>
+            <input type="password" id="inputAdminPinChange" maxlength="6" placeholder="Change PIN"
                    class="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-medium">
             <p class="text-[11px] text-slate-400 mt-1">Leave empty to keep existing PIN</p>
           </div>
         </div>
 
-        <div class="flex items-center justify-between pt-3 border-t border-slate-200">
-          <button type="button" id="manageRoommatesModalBtn" class="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center gap-1.5">
-            <i data-lucide="users" class="w-4 h-4 text-emerald-600"></i>
-            Manage Roommate List (<span id="adminRoommateCount">0</span>)
-          </button>
+        <!-- Sync Explanation Notice -->
+        <div class="bg-blue-50/80 border border-blue-200 rounded-xl p-3.5 text-xs text-blue-900 flex items-start gap-2.5">
+          <i data-lucide="info" class="w-4 h-4 text-blue-600 shrink-0 mt-0.5"></i>
+          <div>
+            <p class="font-bold">How other browsers and roommates see updated bills:</p>
+            <p class="text-[11px] text-blue-800 mt-1 leading-relaxed">
+              &bull; <strong>Option 1 (Instant via WhatsApp - Recommended):</strong> After clicking "Save Month Bills", click <strong>"WhatsApp Group"</strong> or <strong>"Share Link"</strong>. When roommates open that link, their phones automatically update to the latest bills!<br>
+              &bull; <strong>Option 2 (Permanent on GitHub for all devices):</strong> Click <strong>"Download data.json"</strong> below and upload it to your GitHub repository once a month. All browsers opening the plain link will permanently load the new bills.
+            </p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-200">
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="button" id="manageRoommatesModalBtn" class="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition">
+              <i data-lucide="users" class="w-4 h-4 text-emerald-600"></i>
+              Manage Roommates (<span id="adminRoommateCount">0</span>)
+            </button>
+            <button type="button" id="downloadDataJsonBtn" class="text-xs font-semibold text-emerald-800 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition shadow-sm">
+              <i data-lucide="download" class="w-3.5 h-3.5 text-emerald-600"></i>
+              <span>Download data.json (For GitHub)</span>
+            </button>
+          </div>
 
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-xl text-sm font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-2">
             <i data-lucide="save" class="w-4 h-4"></i>
@@ -720,11 +738,10 @@
       </div>
       <div>
         <h4 class="font-bold text-slate-900 text-base">Enter Admin PIN</h4>
-        <p class="text-xs text-slate-500 mt-0.5">Only room admin can edit bills and status (Default PIN: <strong>8459</strong>)</p>
       </div>
       <input type="password" id="adminPinInput" maxlength="6" placeholder="PIN" autofocus
              class="w-full text-center tracking-widest text-xl font-bold py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none">
-      <div id="adminPinError" class="text-xs text-red-500 font-medium hidden">Incorrect PIN. Try 8459.</div>
+      <div id="adminPinError" class="text-xs text-red-500 font-medium hidden">Incorrect PIN. Please try again.</div>
       <div class="flex gap-2">
         <button onclick="document.getElementById('adminPinModal').classList.add('hidden')" class="w-1/2 py-2 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold">
           Cancel
@@ -827,6 +844,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=4.6"></script>
+  <script src="app.js?v=4.7"></script>
 </body>
 </html>

@@ -86,6 +86,7 @@
     initAuth();
     renderAll();
     setupEventListeners();
+    loadDataJson();
   });
 
   // Load state from URL hash or LocalStorage
@@ -266,6 +267,61 @@
       passField.focus();
     }
   };
+
+  // Load data.json from server if present (for permanent cross-device sync)
+  async function loadDataJson() {
+    try {
+      const res = await fetch('data.json?t=' + Date.now(), { cache: 'no-store' });
+      if (res.ok) {
+        const remoteData = await res.json();
+        if (remoteData && remoteData.bill) {
+          appState = {
+            ...defaultData,
+            ...appState,
+            ...remoteData,
+            flatName: remoteData.flatName || appState.flatName || 'ROOM NO 12',
+            bill: { ...defaultData.bill, ...appState.bill, ...(remoteData.bill || {}) },
+            roommates: Array.isArray(remoteData.roommates) && remoteData.roommates.length > 0
+              ? remoteData.roommates
+              : appState.roommates,
+            adminPin: appState.adminPin || DEFAULT_PIN
+          };
+          saveState();
+          renderAll();
+        }
+      }
+    } catch (e) {
+      console.warn('data.json check:', e);
+    }
+  }
+
+  function downloadDataJson() {
+    try {
+      const exportData = {
+        flatName: appState.flatName || 'ROOM NO 12',
+        activeMonth: appState.activeMonth,
+        dueNote: appState.dueNote,
+        upiId: appState.upiId,
+        adminPhone: appState.adminPhone,
+        razorpayKey: appState.razorpayKey,
+        bill: appState.bill,
+        roommates: appState.roommates
+      };
+      const jsonStr = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'data.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('data.json downloaded! Upload it to your GitHub repository to update all browsers permanently.');
+    } catch (err) {
+      console.error('Error generating data.json download:', err);
+    }
+  }
 
   // Generate URL that encodes full current state
   function getShareableUrl() {
@@ -592,7 +648,7 @@
 
       saveState();
       renderAll();
-      showToast('Monthly rent, bills & notices saved successfully!');
+      showToast('Saved! Use WhatsApp button or Download data.json to sync with roommates.');
     });
 
     // Light Calculator Toggle & Apply
@@ -866,6 +922,12 @@
           handleLogout();
         }
       });
+    }
+
+    // Download data.json button
+    const downloadDataJsonBtn = document.getElementById('downloadDataJsonBtn');
+    if (downloadDataJsonBtn) {
+      downloadDataJsonBtn.addEventListener('click', downloadDataJson);
     }
   }
 

@@ -1,0 +1,24 @@
+{
+  "flatName": "ROOM NO 12",
+  "activeMonth": "October 2026",
+  "dueNote": "Due by 5th of every month",
+  "upiId": "8459807346@slc",
+  "adminPhone": "918459807346",
+  "razorpayKey": "",
+  "bill": {
+    "roomRent": 8500,
+    "buildingMaintenance": 500,
+    "cleaningMaintenance": 500,
+    "lightBill": 1000,
+    "lightMeterPrev": 1250,
+    "lightMeterCurr": 1355,
+    "lightRatePerUnit": 9.5
+  },
+  "roommates": [
+    { "id": "1", "name": "Harshal", "status": "pending", "paidOn": null, "utr": null, "method": null, "paidAt": null },
+    { "id": "2", "name": "Kalpesh (You)", "status": "paid", "paidOn": "02 Oct", "utr": "Self / Host", "method": "Direct Transfer", "paidAt": "02 Oct 2026, 10:00 AM" },
+    { "id": "3", "name": "Chetan", "status": "pending", "paidOn": null, "utr": null, "method": null, "paidAt": null },
+    { "id": "4", "name": "Chirag", "status": "pending", "paidOn": null, "utr": null, "method": null, "paidAt": null },
+    { "id": "5", "name": "Onkar", "status": "pending", "paidOn": null, "utr": null, "method": null, "paidAt": null }
+  ]
+}
