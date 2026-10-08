@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Roommate Rent & Light Bill Tracker</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Lucide Icons -->
@@ -15,7 +18,7 @@
   <!-- Canvas Confetti for payment success animation -->
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
   <!-- Custom styles -->
-  <link rel="stylesheet" href="styles.css?v=4.7">
+  <link rel="stylesheet" href="styles.css?v=5.1">
   <script>
     tailwind.config = {
       darkMode: 'class',
@@ -141,6 +144,12 @@
         <button id="whatsappShareBtn" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition border border-emerald-200">
           <i data-lucide="share-2" class="w-4 h-4"></i>
           <span class="hidden sm:inline">WhatsApp Group</span>
+        </button>
+
+        <!-- UPI Directory Button -->
+        <button id="upiDirectoryBtn" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition border border-blue-200">
+          <i data-lucide="book-user" class="w-4 h-4 text-blue-600"></i>
+          <span>UPI Directory</span>
         </button>
 
         <!-- Admin Toggle Button -->
@@ -836,14 +845,83 @@
         </div>
       </div>
 
-      <div class="pt-3 border-t border-slate-200 flex justify-end">
-        <button onclick="document.getElementById('hostingGuideModal').classList.add('hidden')" class="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-semibold">
-          Got it!
-        </button>
+  <!-- 4. UPI Directory Modal (Phase 1) -->
+  <div id="upiDirectoryModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-200">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+            <i data-lucide="book-user" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h4 class="font-bold text-slate-900 text-base leading-tight">Roommate UPI Directory</h4>
+            <p class="text-[11px] text-slate-500">Direct peer-to-peer UPI payments</p>
+          </div>
+        </div>
+        <button onclick="document.getElementById('upiDirectoryModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 font-bold text-xl leading-none">&times;</button>
+      </div>
+
+      <!-- Logged-in user's own UPI edit card -->
+      <div class="p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold text-blue-900">Your UPI ID:</span>
+          <span id="myUpiDisplay" class="text-xs font-mono font-bold text-blue-700">Not set</span>
+        </div>
+        <div class="flex gap-2">
+          <input type="text" id="myUpiInput" placeholder="e.g. yourname@okhdfcbank"
+                 class="flex-1 px-3 py-1.5 text-xs border border-blue-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white font-mono">
+          <button id="btnSaveMyUpi" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition shadow-sm">
+            Save
+          </button>
+        </div>
+      </div>
+
+      <!-- Roommates UPI Directory List -->
+      <div id="upiDirectoryList" class="flex-1 overflow-y-auto space-y-2.5 pr-1 divide-y divide-slate-100">
+        <!-- Rendered dynamically -->
       </div>
     </div>
   </div>
 
-  <script src="app.js?v=4.7"></script>
+  <!-- 5. Direct UPI Quick Pay Modal -->
+  <div id="upiQuickPayModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-6 text-center space-y-4 shadow-2xl animate-scale-in">
+      <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+        <i data-lucide="zap" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h4 class="font-bold text-slate-900 text-lg leading-tight" id="quickPayTargetName">Pay Roommate</h4>
+        <p class="text-xs font-mono text-slate-500 mt-0.5" id="quickPayTargetUpi">upi@bank</p>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1 text-left">Amount (₹):</label>
+        <input type="number" id="quickPayAmount" min="1" step="1" placeholder="Enter amount (e.g. 100)"
+               class="w-full text-center text-2xl font-black py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none">
+      </div>
+
+      <!-- QR Container -->
+      <div class="flex flex-col items-center justify-center p-3 bg-slate-50 rounded-xl border border-slate-200">
+        <div id="quickPayQrContainer" class="w-40 h-40 flex items-center justify-center bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
+          <!-- QR code rendered here -->
+        </div>
+        <span class="text-[10px] text-slate-400 mt-1 font-medium">Scan with any UPI App</span>
+      </div>
+
+      <!-- Mobile Pay Button -->
+      <a id="quickPayMobileLink" href="#"
+         class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm transition shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2">
+        <i data-lucide="external-link" class="w-4 h-4"></i>
+        <span>Open UPI App to Pay</span>
+      </a>
+
+      <button onclick="document.getElementById('upiQuickPayModal').classList.add('hidden')"
+              class="w-full py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 transition">
+        Close
+      </button>
+    </div>
+  </div>
+
+  <script src="app.js?v=5.1"></script>
 </body>
 </html>

@@ -7,11 +7,13 @@
   const STORAGE_KEY = 'roommate_rent_tracker_v5';
   const API_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/state';
   const VERIFY_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/verify';
+  const LOGIN_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/login';
+  const ROOMMATES_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/roommates';
 
   const defaultData = {
     flatName: 'ROOM NO 12',
     activeMonth: 'October 2026',
-    dueNote: 'Due by 5th of every month',
+    dueNote: 'Due by 9th of every month',
     upiId: '8459807346@slc',
     adminPhone: '918459807346',
     razorpayKey: '',
@@ -19,7 +21,7 @@
       roomRent: 8500,
       buildingMaintenance: 500,
       cleaningMaintenance: 500,
-      lightBill: 1000,
+      lightBill: 670,
       lightMeterPrev: 1250,
       lightMeterCurr: 1355,
       lightRatePerUnit: 9.5
@@ -126,7 +128,10 @@
 
   // Only the admin (who typed the correct PIN) can save to the server
   async function pushRemoteState() {
-    if (!isAdminAuthenticated || !adminPinValue) return;
+    if (!isAdminAuthenticated || !adminPinValue) {
+      showToast('⚠️ Changes saved locally only. Click Admin Mode and enter PIN to sync to everyone!');
+      return;
+    }
     const { adminPin, ...dataToSave } = appState; // never upload any PIN
     try {
       const res = await fetch(API_URL, {
@@ -134,11 +139,11 @@
         headers: { 'Content-Type': 'application/json', 'X-Admin-Pin': adminPinValue },
         body: JSON.stringify(dataToSave)
       });
-      if (res.status === 401) showToast('Wrong PIN. Not saved to server.');
-      else if (!res.ok) showToast('Server save failed. Try again.');
-      else showToast('Saved to server for everyone.');
+      if (res.status === 401) showToast('❌ Wrong Admin PIN. Not saved to server.');
+      else if (!res.ok) showToast('❌ Server save failed. Try again.');
+      else showToast('✅ Saved to Cloudflare D1 for everyone!');
     } catch (e) {
-      showToast('No internet. Saved on this device only.');
+      showToast('⚠️ No internet. Saved on this device only.');
     }
   }
 
@@ -151,27 +156,31 @@
     }
   }
 
-  async function loadRemoteState() {
+  let isSyncing = false;
+  async function loadRemoteState(silent = false) {
+    if (isSyncing) return;
+    isSyncing = true;
     try {
       const res = await fetch(API_URL + '?t=' + Date.now(), { cache: 'no-store' });
       if (!res.ok) return;
       const remoteData = await res.json();
-      if (remoteData && remoteData.bill) {
+      if (remoteData && typeof remoteData === 'object' && remoteData.bill) {
         appState = {
           ...defaultData,
-          ...appState,
           ...remoteData,
-          flatName: remoteData.flatName || appState.flatName || 'ROOM NO 12',
-          bill: { ...defaultData.bill, ...appState.bill, ...(remoteData.bill || {}) },
+          flatName: remoteData.flatName || 'ROOM NO 12',
+          bill: { ...defaultData.bill, ...(remoteData.bill || {}) },
           roommates: Array.isArray(remoteData.roommates) && remoteData.roommates.length > 0
             ? remoteData.roommates
-            : appState.roommates
+            : defaultData.roommates
         };
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appState)); } catch (e) {}
         renderAll();
       }
     } catch (e) {
-      console.warn('Server load failed:', e);
+      if (!silent) console.warn('Server load failed:', e);
+    } finally {
+      isSyncing = false;
     }
   }
 
@@ -212,14 +221,18 @@
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed && parsed.id) {
-          const matched = AUTH_USERS.find(u => u.id.toLowerCase() === parsed.id.toLowerCase());
-          if (matched) {
-            currentLoggedInUser = matched;
-            const loginScreen = document.getElementById('loginScreen');
-            if (loginScreen) loginScreen.classList.add('hidden');
-            updateUserHeaderBadge();
-            return;
-          }
+          const matched = AUTH_USERS.find(u => u.id.toLowerCase() === parsed.id.toLowerCase()) || {
+            id: parsed.id,
+            display: parsed.display || parsed.name,
+            roommateId: parsed.roommateId || parsed.id,
+            isAdmin: !!parsed.isAdmin
+          };
+          currentLoggedInUser = matched;
+          const loginScreen = document.getElementById('loginScreen');
+          if (loginScreen) loginScreen.classList.add('hidden');
+          updateUserHeaderBadge();
+          loadUpiDirectory();
+          return;
         }
       }
     } catch (e) {
@@ -231,10 +244,47 @@
     updateUserHeaderBadge();
   }
 
-  function handleLogin(username, password) {
+  async function handleLogin(username, password) {
     const cleanUser = (username || '').trim().toLowerCase();
     const cleanPass = (password || '').trim();
 
+    // 1. Authenticate with Cloudflare Worker Phase 0 endpoint
+    try {
+      const res = await fetch(LOGIN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: cleanUser, pin: cleanPass })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success && data.user) {
+          currentLoggedInUser = {
+            id: data.user.id,
+            display: data.user.name,
+            roommateId: data.user.id,
+            isAdmin: !!data.user.isAdmin,
+            upiId: data.user.upiId || ''
+          };
+          if (data.token) localStorage.setItem('roommate_token', data.token);
+          localStorage.setItem('roommate_logged_in_user', JSON.stringify(currentLoggedInUser));
+
+          const loginScreen = document.getElementById('loginScreen');
+          if (loginScreen) loginScreen.classList.add('hidden');
+          const errorMsg = document.getElementById('loginErrorMsg');
+          if (errorMsg) errorMsg.classList.add('hidden');
+
+          updateUserHeaderBadge();
+          renderAll();
+          loadUpiDirectory();
+          showToast(`Welcome back, ${data.user.name}!`);
+          return true;
+        }
+      }
+    } catch (err) {
+      console.warn('Cloudflare login error, falling back to local list:', err);
+    }
+
+    // 2. Offline fallback
     const matched = AUTH_USERS.find(u =>
       (u.id.toLowerCase() === cleanUser || u.display.toLowerCase() === cleanUser) &&
       (u.pass === cleanPass || u.pass.toLowerCase() === cleanPass.toLowerCase())
@@ -256,6 +306,7 @@
 
       updateUserHeaderBadge();
       renderAll();
+      loadUpiDirectory();
       showToast(`Welcome back, ${matched.display}!`);
       return true;
     } else {
@@ -268,6 +319,7 @@
   function handleLogout() {
     currentLoggedInUser = null;
     localStorage.removeItem('roommate_logged_in_user');
+    localStorage.removeItem('roommate_token');
     isAdminAuthenticated = false;
     adminPinValue = null;
 
@@ -866,6 +918,45 @@
     if (downloadDataJsonBtn) {
       downloadDataJsonBtn.addEventListener('click', downloadDataJson);
     }
+
+    // UPI Directory button
+    const upiDirBtn = document.getElementById('upiDirectoryBtn');
+    if (upiDirBtn) {
+      upiDirBtn.addEventListener('click', () => {
+        loadUpiDirectory();
+        document.getElementById('upiDirectoryModal').classList.remove('hidden');
+      });
+    }
+
+    // Save my UPI ID button
+    const btnSaveMyUpi = document.getElementById('btnSaveMyUpi');
+    if (btnSaveMyUpi) {
+      btnSaveMyUpi.addEventListener('click', saveMyUpiId);
+    }
+
+    // Quick Pay amount change (live QR update)
+    const quickPayAmountInput = document.getElementById('quickPayAmount');
+    if (quickPayAmountInput) {
+      quickPayAmountInput.addEventListener('input', () => {
+        updateQuickPayQr();
+      });
+    }
+
+    // Auto-sync polling every 12 seconds so all devices see live updates
+    setInterval(() => {
+      loadRemoteState(true);
+    }, 12000);
+
+    // Refresh when returning to the tab
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        loadRemoteState(true);
+      }
+    });
+
+    window.addEventListener('focus', () => {
+      loadRemoteState(true);
+    });
   }
 
   // ---------- PAYMENTS ----------
@@ -1076,6 +1167,191 @@
       "'": '&#39;',
       '"': '&quot;'
     }[tag] || tag));
+  // ---------- PHASE 1: UPI DIRECTORY ----------
+
+  let upiDirectoryRoommates = [];
+  let quickPayActiveTarget = null;
+
+  async function loadUpiDirectory() {
+    const list = document.getElementById('upiDirectoryList');
+    if (!list) return;
+
+    const token = localStorage.getItem('roommate_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(ROOMMATES_URL, { headers });
+      if (res.ok) {
+        upiDirectoryRoommates = await res.json();
+      }
+    } catch (e) {
+      console.warn('Could not fetch remote UPI directory, using fallback:', e);
+    }
+
+    if (!upiDirectoryRoommates || upiDirectoryRoommates.length === 0) {
+      upiDirectoryRoommates = appState.roommates.map(r => ({
+        id: r.id,
+        name: r.name.replace(/\s*\(You\)/i, ''),
+        upi_id: r.name.toLowerCase().includes('kalpesh') ? (appState.upiId || '8459807346@slc') : '',
+        phone: appState.adminPhone || '918459807346'
+      }));
+    }
+
+    // Update logged-in user's own UPI card
+    if (currentLoggedInUser) {
+      const myRecord = upiDirectoryRoommates.find(r =>
+        r.id === currentLoggedInUser.roommateId ||
+        r.name.toLowerCase() === currentLoggedInUser.display.toLowerCase()
+      );
+      const myUpiDisplay = document.getElementById('myUpiDisplay');
+      const myUpiInput = document.getElementById('myUpiInput');
+      if (myRecord && myRecord.upi_id) {
+        if (myUpiDisplay) myUpiDisplay.textContent = myRecord.upi_id;
+        if (myUpiInput && !myUpiInput.value) myUpiInput.value = myRecord.upi_id;
+      } else {
+        if (myUpiDisplay) myUpiDisplay.textContent = 'Not set yet';
+      }
+    }
+
+    // Render list
+    list.innerHTML = upiDirectoryRoommates.map(r => {
+      const hasUpi = Boolean(r.upi_id && r.upi_id.trim());
+      const isMe = currentLoggedInUser && (
+        r.id === currentLoggedInUser.roommateId ||
+        r.name.toLowerCase() === currentLoggedInUser.display.toLowerCase()
+      );
+
+      return `
+        <div class="py-3 flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2.5">
+            <div class="w-9 h-9 rounded-xl ${isMe ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'} font-bold flex items-center justify-center text-xs shadow-sm">
+              ${escapeHtml(r.name.charAt(0).toUpperCase())}
+            </div>
+            <div>
+              <div class="flex items-center gap-1.5">
+                <p class="text-sm font-bold text-slate-900 leading-tight">${escapeHtml(r.name)}</p>
+                ${isMe ? '<span class="text-[9px] font-extrabold bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-full border border-blue-200">You</span>' : ''}
+              </div>
+              <p class="text-xs font-mono text-slate-500 mt-0.5">${hasUpi ? escapeHtml(r.upi_id) : '<span class="text-slate-400 italic">No UPI added</span>'}</p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-1.5 shrink-0">
+            ${hasUpi ? `
+              <button onclick="window.copyUpiString('${escapeHtml(r.upi_id)}')" title="Copy UPI ID"
+                      class="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition border border-slate-200 text-xs">
+                <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+              </button>
+              <button onclick="window.openQuickPayModal('${escapeHtml(r.name)}', '${escapeHtml(r.upi_id)}')"
+                      class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition shadow-sm flex items-center gap-1">
+                <i data-lucide="zap" class="w-3 h-3 text-amber-300"></i>
+                <span>Pay</span>
+              </button>
+            ` : `
+              <span class="text-[11px] text-slate-400 font-medium">Pending</span>
+            `}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  async function saveMyUpiId() {
+    if (!currentLoggedInUser) {
+      showToast('Please sign in first.');
+      return;
+    }
+
+    const input = document.getElementById('myUpiInput');
+    const newUpi = (input ? input.value : '').trim();
+    if (!newUpi) {
+      showToast('Please enter a valid UPI ID (e.g. name@bank)');
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(newUpi)) {
+      showToast('Invalid UPI ID format. Example: yourname@oksbi');
+      return;
+    }
+
+    const token = localStorage.getItem('roommate_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (adminPinValue) headers['X-Admin-Pin'] = adminPinValue;
+
+    try {
+      const res = await fetch(`${ROOMMATES_URL}/${currentLoggedInUser.roommateId}/upi`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ upiId: newUpi })
+      });
+
+      if (res.ok) {
+        showToast('✅ Your UPI ID was saved successfully!');
+        const myUpiDisplay = document.getElementById('myUpiDisplay');
+        if (myUpiDisplay) myUpiDisplay.textContent = newUpi;
+        loadUpiDirectory();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to save UPI ID on server.');
+      }
+    } catch (e) {
+      showToast('No internet. Saved locally.');
+      const myUpiDisplay = document.getElementById('myUpiDisplay');
+      if (myUpiDisplay) myUpiDisplay.textContent = newUpi;
+    }
+  }
+
+  window.copyUpiString = function (upiStr) {
+    if (!upiStr) return;
+    navigator.clipboard.writeText(upiStr).then(() => {
+      showToast(`UPI copied: ${upiStr}`);
+    }).catch(() => {
+      prompt('Copy UPI ID:', upiStr);
+    });
+  };
+
+  window.openQuickPayModal = function (name, upiId) {
+    quickPayActiveTarget = { name, upiId };
+    const modal = document.getElementById('upiQuickPayModal');
+    if (!modal) return;
+
+    document.getElementById('quickPayTargetName').textContent = `Pay ${name}`;
+    document.getElementById('quickPayTargetUpi').textContent = upiId;
+    const amtInput = document.getElementById('quickPayAmount');
+    if (amtInput && !amtInput.value) amtInput.value = '100';
+
+    updateQuickPayQr();
+    modal.classList.remove('hidden');
+    if (window.lucide) window.lucide.createIcons();
+  };
+
+  function updateQuickPayQr() {
+    if (!quickPayActiveTarget) return;
+    const amtInput = document.getElementById('quickPayAmount');
+    const amt = amtInput && Number(amtInput.value) > 0 ? Number(amtInput.value) : 100;
+    const upiUri = `upi://pay?pa=${encodeURIComponent(quickPayActiveTarget.upiId)}&pn=${encodeURIComponent(quickPayActiveTarget.name)}&am=${amt}&cu=INR&tn=${encodeURIComponent('Room 12 Payment')}`;
+
+    const mobileLink = document.getElementById('quickPayMobileLink');
+    if (mobileLink) mobileLink.href = upiUri;
+
+    const qrContainer = document.getElementById('quickPayQrContainer');
+    if (qrContainer) {
+      qrContainer.innerHTML = '';
+      if (window.QRCode) {
+        new QRCode(qrContainer, {
+          text: upiUri,
+          width: 140,
+          height: 140,
+          colorDark: '#0f172a',
+          colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      }
+    }
   }
 
 })();
