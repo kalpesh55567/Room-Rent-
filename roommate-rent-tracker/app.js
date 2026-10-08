@@ -9,6 +9,8 @@
   const VERIFY_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/verify';
   const LOGIN_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/login';
   const ROOMMATES_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/roommates';
+  const EXPENSES_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/expenses';
+  const PAYMENTS_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/payments';
 
   const defaultData = {
     flatName: 'ROOM NO 12',
@@ -942,6 +944,72 @@
       });
     }
 
+    // Phase 2: Expenses modal button
+    const expBtn = document.getElementById('expensesBtn');
+    if (expBtn) {
+      expBtn.addEventListener('click', () => {
+        loadExpenses();
+        document.getElementById('expensesModal').classList.remove('hidden');
+      });
+    }
+
+    // Phase 2: Filter buttons
+    const btnFilterAllExp = document.getElementById('btnFilterAllExp');
+    const btnFilterMyExp = document.getElementById('btnFilterMyExp');
+    if (btnFilterAllExp && btnFilterMyExp) {
+      btnFilterAllExp.addEventListener('click', () => {
+        currentExpenseFilter = 'all';
+        btnFilterAllExp.className = 'px-3 py-1.5 rounded-lg bg-indigo-600 text-white shadow-sm';
+        btnFilterMyExp.className = 'px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200';
+        renderExpensesList();
+      });
+      btnFilterMyExp.addEventListener('click', () => {
+        currentExpenseFilter = 'my';
+        btnFilterMyExp.className = 'px-3 py-1.5 rounded-lg bg-indigo-600 text-white shadow-sm';
+        btnFilterAllExp.className = 'px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200';
+        renderExpensesList();
+      });
+    }
+
+    // Phase 2: Open add expense modal
+    const btnOpenAddExpense = document.getElementById('btnOpenAddExpense');
+    if (btnOpenAddExpense) {
+      btnOpenAddExpense.addEventListener('click', openAddExpenseModal);
+    }
+
+    // Phase 2: Select all participants
+    const btnSelectAllSplit = document.getElementById('btnSelectAllSplit');
+    if (btnSelectAllSplit) {
+      btnSelectAllSplit.addEventListener('click', () => {
+        document.querySelectorAll('.split-participant-chk').forEach(c => c.checked = true);
+        updateSplitPreview();
+      });
+    }
+
+    // Phase 2: Amount input live preview
+    const inputExpAmount = document.getElementById('inputExpAmount');
+    if (inputExpAmount) {
+      inputExpAmount.addEventListener('input', updateSplitPreview);
+    }
+
+    // Phase 2: Add expense form submission
+    const addExpenseForm = document.getElementById('addExpenseForm');
+    if (addExpenseForm) {
+      addExpenseForm.addEventListener('submit', handleAddExpenseSubmit);
+    }
+
+    // Phase 2: Pay split confirm form submission
+    const paySplitConfirmForm = document.getElementById('paySplitConfirmForm');
+    if (paySplitConfirmForm) {
+      paySplitConfirmForm.addEventListener('submit', handlePaySplitSubmit);
+    }
+
+    // Phase 2: Amount input in pay split modal (live QR update)
+    const paySplitCustomAmount = document.getElementById('paySplitCustomAmount');
+    if (paySplitCustomAmount) {
+      paySplitCustomAmount.addEventListener('input', updatePaySplitQr);
+    }
+
     // Auto-sync polling every 12 seconds so all devices see live updates
     setInterval(() => {
       loadRemoteState(true);
@@ -1353,5 +1421,480 @@
       }
     }
   }
+
+  // ---------- PHASE 2: SHARED PURCHASES & SPLITS ----------
+
+  let currentExpenseFilter = 'all';
+  let expensesState = { expenses: [], splits: [], payments: [] };
+  let activePaySplitContext = null;
+
+  async function loadExpenses() {
+    const list = document.getElementById('expensesList');
+    if (!list) return;
+
+    const token = localStorage.getItem('roommate_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(EXPENSES_URL, { headers });
+      if (res.ok) {
+        expensesState = await res.json();
+      }
+    } catch (e) {
+      console.warn('Error fetching expenses:', e);
+    }
+
+    calculateAndRenderBalances();
+    renderPendingConfirmations();
+    renderExpensesList();
+  }
+
+  function calculateAndRenderBalances() {
+    if (!currentLoggedInUser) return;
+    const myId = currentLoggedInUser.roommateId;
+
+    let myReceivablePaise = 0; // People owe me
+    let myPayablePaise = 0;    // I owe buyers
+
+    const expenses = expensesState.expenses || [];
+    const splits = expensesState.splits || [];
+    const payments = expensesState.payments || [];
+
+    // Helper: sum confirmed payments for a given split
+    function getConfirmedPaid(expenseId, fromId, toId) {
+      return payments
+        .filter(p => p.expense_id === expenseId && p.from_id === fromId && p.to_id === toId && p.status === 'confirmed')
+        .reduce((sum, p) => sum + p.amount_paise, 0);
+    }
+
+    expenses.forEach(exp => {
+      const expSplits = splits.filter(s => s.expense_id === exp.id);
+      const buyerId = exp.paid_by;
+
+      expSplits.forEach(sp => {
+        if (sp.person_id === buyerId) return; // Buyer doesn't owe themselves
+        const confirmedPaid = getConfirmedPaid(exp.id, sp.person_id, buyerId);
+        const remaining = Math.max(0, sp.share_paise - confirmedPaid);
+
+        if (buyerId === myId) {
+          myReceivablePaise += remaining;
+        } else if (sp.person_id === myId) {
+          myPayablePaise += remaining;
+        }
+      });
+    });
+
+    const recEl = document.getElementById('myReceivableBalance');
+    const payEl = document.getElementById('myPayableBalance');
+    if (recEl) recEl.textContent = `₹${(myReceivablePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+    if (payEl) payEl.textContent = `₹${(myPayablePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+  }
+
+  function renderPendingConfirmations() {
+    const sec = document.getElementById('pendingConfirmationSection');
+    const list = document.getElementById('pendingConfirmationsList');
+    if (!sec || !list || !currentLoggedInUser) return;
+
+    const myId = currentLoggedInUser.roommateId;
+    const pendingToMe = (expensesState.payments || []).filter(p => p.to_id === myId && p.status === 'pending');
+
+    if (pendingToMe.length === 0) {
+      sec.classList.add('hidden');
+      return;
+    }
+
+    sec.classList.remove('hidden');
+    list.innerHTML = pendingToMe.map(p => `
+      <div class="py-2 px-3 bg-white border border-amber-300 rounded-lg flex items-center justify-between text-xs gap-2">
+        <div>
+          <span class="font-bold text-slate-800">${escapeHtml(p.from_name)}</span> paid you
+          <span class="font-black text-emerald-700">₹${(p.amount_paise / 100).toFixed(0)}</span>
+          ${p.utr ? `<span class="block text-[10px] font-mono text-slate-500">Ref: ${escapeHtml(p.utr)}</span>` : ''}
+        </div>
+        <div class="flex gap-1.5 shrink-0">
+          <button onclick="window.confirmSplitPayment(${p.id}, 'confirm')"
+                  class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs shadow-sm">
+            Confirm
+          </button>
+          <button onclick="window.confirmSplitPayment(${p.id}, 'reject')"
+                  class="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 font-bold rounded-lg text-xs">
+            Reject
+          </button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderExpensesList() {
+    const container = document.getElementById('expensesList');
+    if (!container) return;
+
+    const myId = currentLoggedInUser ? currentLoggedInUser.roommateId : null;
+    let expenses = expensesState.expenses || [];
+    const splits = expensesState.splits || [];
+    const payments = expensesState.payments || [];
+
+    if (currentExpenseFilter === 'my' && myId) {
+      expenses = expenses.filter(e => {
+        const hasMySplit = splits.some(s => s.expense_id === e.id && s.person_id === myId);
+        return e.paid_by === myId || hasMySplit;
+      });
+    }
+
+    if (expenses.length === 0) {
+      container.innerHTML = `
+        <div class="p-8 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+          <i data-lucide="shopping-bag" class="w-8 h-8 text-slate-300 mx-auto"></i>
+          <p class="text-sm font-semibold text-slate-600">No shared purchases recorded yet</p>
+          <p class="text-xs text-slate-400">Click "Add Purchase" above to record groceries, supplies or WiFi!</p>
+        </div>
+      `;
+      if (window.lucide) window.lucide.createIcons();
+      return;
+    }
+
+    container.innerHTML = expenses.map(exp => {
+      const expSplits = splits.filter(s => s.expense_id === exp.id);
+      const isBuyer = myId && exp.paid_by === myId;
+      const isAdmin = currentLoggedInUser && currentLoggedInUser.isAdmin;
+
+      const splitItemsHtml = expSplits.map(sp => {
+        const isSelf = myId && sp.person_id === myId;
+        const isBuyerSplit = sp.person_id === exp.paid_by;
+
+        const confirmedPaid = payments
+          .filter(p => p.expense_id === exp.id && p.from_id === sp.person_id && p.to_id === exp.paid_by && p.status === 'confirmed')
+          .reduce((sum, p) => sum + p.amount_paise, 0);
+
+        const hasPendingPayment = payments.some(
+          p => p.expense_id === exp.id && p.from_id === sp.person_id && p.to_id === exp.paid_by && p.status === 'pending'
+        );
+
+        const remainingPaise = Math.max(0, sp.share_paise - confirmedPaid);
+        const isFullyPaid = isBuyerSplit || remainingPaise === 0;
+
+        let statusBadge = '';
+        if (isBuyerSplit) {
+          statusBadge = '<span class="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Buyer</span>';
+        } else if (isFullyPaid) {
+          statusBadge = '<span class="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Settled</span>';
+        } else if (hasPendingPayment) {
+          statusBadge = '<span class="text-[10px] text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 animate-pulse">Awaiting Approval</span>';
+        } else if (confirmedPaid > 0) {
+          statusBadge = `<span class="text-[10px] text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">Partially Paid (₹${(remainingPaise / 100).toFixed(0)} left)</span>`;
+        } else {
+          statusBadge = '<span class="text-[10px] text-rose-700 font-bold bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">Unpaid</span>';
+        }
+
+        const payBtn = (!isFullyPaid && isSelf && !isBuyer) ? `
+          <button onclick="window.openPaySplitModal(${exp.id}, '${sp.person_id}', '${exp.paid_by}')"
+                  class="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition shadow-sm flex items-center gap-1 shrink-0">
+            <i data-lucide="zap" class="w-3 h-3 text-amber-300"></i>
+            <span>Pay ₹${(remainingPaise / 100).toFixed(0)}</span>
+          </button>
+        ` : '';
+
+        return `
+          <div class="py-1.5 flex items-center justify-between text-xs gap-2">
+            <div class="flex items-center gap-1.5">
+              <span class="font-medium text-slate-800">${escapeHtml(sp.person_name)}</span>
+              ${isSelf ? '<span class="text-[9px] font-extrabold bg-blue-100 text-blue-800 px-1 py-0.2 rounded">You</span>' : ''}
+              <span class="text-slate-400 font-mono">₹${(sp.share_paise / 100).toFixed(0)}</span>
+            </div>
+            <div class="flex items-center gap-2">
+              ${statusBadge}
+              ${payBtn}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="p-4 bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition space-y-3">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <h5 class="font-bold text-slate-900 text-base leading-tight">${escapeHtml(exp.title)}</h5>
+                <span class="text-[11px] font-mono text-slate-400">${escapeHtml(exp.expense_date)}</span>
+              </div>
+              <p class="text-xs text-slate-500 mt-0.5">
+                Paid by <span class="font-bold text-slate-700">${escapeHtml(exp.payer_name)}</span>
+                ${exp.note ? ` &bull; <span class="italic text-slate-400">${escapeHtml(exp.note)}</span>` : ''}
+              </p>
+            </div>
+            <div class="text-right shrink-0">
+              <span class="text-xs text-slate-400 block font-medium">Total</span>
+              <span class="text-lg font-black text-slate-900">₹${(exp.amount_paise / 100).toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+
+          <div class="pt-2 border-t border-slate-100 divide-y divide-slate-50">
+            ${splitItemsHtml}
+          </div>
+
+          ${(isBuyer || isAdmin) ? `
+            <div class="pt-2 border-t border-slate-100 flex justify-end">
+              <button onclick="window.deleteExpense(${exp.id})"
+                      class="text-[11px] text-rose-500 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 px-2 py-1 rounded-lg transition">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                <span>Delete Purchase</span>
+              </button>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }).join('');
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  function openAddExpenseModal() {
+    const modal = document.getElementById('addExpenseModal');
+    if (!modal) return;
+
+    // Reset fields
+    document.getElementById('inputExpTitle').value = '';
+    document.getElementById('inputExpAmount').value = '';
+    document.getElementById('inputExpNote').value = '';
+    document.getElementById('inputExpDate').value = new Date().toISOString().split('T')[0];
+
+    // Populate Paid By dropdown
+    const selectPaidBy = document.getElementById('selectExpPaidBy');
+    if (selectPaidBy) {
+      selectPaidBy.innerHTML = appState.roommates.map(r => `
+        <option value="${r.id}" ${currentLoggedInUser && currentLoggedInUser.roommateId === r.id ? 'selected' : ''}>
+          ${escapeHtml(r.name.replace(/\s*\(You\)/i, ''))}
+        </option>
+      `).join('');
+    }
+
+    // Populate Split With checkboxes (all checked by default)
+    const partCont = document.getElementById('splitParticipantsContainer');
+    if (partCont) {
+      partCont.innerHTML = appState.roommates.map(r => `
+        <label class="flex items-center gap-2 p-1.5 hover:bg-white rounded-lg cursor-pointer">
+          <input type="checkbox" value="${r.id}" checked class="split-participant-chk rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4">
+          <span class="font-medium text-slate-800">${escapeHtml(r.name.replace(/\s*\(You\)/i, ''))}</span>
+        </label>
+      `).join('');
+
+      partCont.querySelectorAll('.split-participant-chk').forEach(c => {
+        c.addEventListener('change', updateSplitPreview);
+      });
+    }
+
+    updateSplitPreview();
+    modal.classList.remove('hidden');
+  }
+
+  function updateSplitPreview() {
+    const amt = Number(document.getElementById('inputExpAmount').value) || 0;
+    const chks = document.querySelectorAll('.split-participant-chk:checked');
+    const preview = document.getElementById('splitCalcPreview');
+    if (!preview) return;
+
+    if (amt > 0 && chks.length > 0) {
+      const perHead = Math.floor(amt / chks.length);
+      preview.textContent = `₹${amt} split equally among ${chks.length} roommates = ~₹${perHead} each.`;
+    } else {
+      preview.textContent = 'Enter amount and select roommates to preview split.';
+    }
+  }
+
+  async function handleAddExpenseSubmit(e) {
+    e.preventDefault();
+    const title = document.getElementById('inputExpTitle').value.trim();
+    const amount = Number(document.getElementById('inputExpAmount').value);
+    const paidBy = document.getElementById('selectExpPaidBy').value;
+    const expenseDate = document.getElementById('inputExpDate').value;
+    const note = document.getElementById('inputExpNote').value.trim();
+
+    const chks = Array.from(document.querySelectorAll('.split-participant-chk:checked'));
+    const splitWith = chks.map(c => c.value);
+
+    if (!title || !amount || amount <= 0 || splitWith.length === 0) {
+      showToast('Please fill all required fields and select at least one roommate.');
+      return;
+    }
+
+    const token = localStorage.getItem('roommate_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(EXPENSES_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          title,
+          amountPaise: Math.round(amount * 100),
+          paidBy,
+          expenseDate,
+          splitWith,
+          note
+        })
+      });
+
+      if (res.ok) {
+        showToast('✅ Purchase added and split equally!');
+        document.getElementById('addExpenseModal').classList.add('hidden');
+        loadExpenses();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to save purchase.');
+      }
+    } catch (e) {
+      showToast('Offline error saving purchase.');
+    }
+  }
+
+  window.deleteExpense = async function (id) {
+    if (!confirm('Are you sure you want to remove this purchase?')) return;
+    const token = localStorage.getItem('roommate_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${EXPENSES_URL}/${id}`, { method: 'DELETE', headers });
+      if (res.ok) {
+        showToast('Purchase removed.');
+        loadExpenses();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to delete.');
+      }
+    } catch (e) {
+      showToast('Network error.');
+    }
+  };
+
+  window.openPaySplitModal = function (expenseId, splitPersonId, buyerId) {
+    const exp = (expensesState.expenses || []).find(e => e.id === expenseId);
+    const split = (expensesState.splits || []).find(s => s.expense_id === expenseId && s.person_id === splitPersonId);
+    const buyer = (upiDirectoryRoommates || []).find(r => r.id === buyerId) || { name: exp ? exp.payer_name : 'Roommate', upi_id: '' };
+
+    if (!exp || !split) return;
+
+    const confirmedPaid = (expensesState.payments || [])
+      .filter(p => p.expense_id === expenseId && p.from_id === splitPersonId && p.to_id === buyerId && p.status === 'confirmed')
+      .reduce((sum, p) => sum + p.amount_paise, 0);
+
+    const remainingPaise = Math.max(0, split.share_paise - confirmedPaid);
+    const remainingRupees = Math.round(remainingPaise / 100);
+
+    activePaySplitContext = {
+      expenseId,
+      splitPersonId,
+      buyerId,
+      buyerName: buyer.name,
+      buyerUpi: buyer.upi_id || '8459807346@slc',
+      remainingPaise
+    };
+
+    document.getElementById('paySplitTitle').textContent = `Pay for: ${exp.title}`;
+    document.getElementById('paySplitRecipient').textContent = `${buyer.name} (${activePaySplitContext.buyerUpi})`;
+    document.getElementById('paySplitTotalShare').textContent = `₹${(split.share_paise / 100).toFixed(0)}`;
+    document.getElementById('paySplitAlreadyPaid').textContent = `₹${(confirmedPaid / 100).toFixed(0)}`;
+    document.getElementById('paySplitRemaining').textContent = `₹${remainingRupees}`;
+    document.getElementById('paySplitCustomAmount').value = remainingRupees;
+    document.getElementById('paySplitUtrInput').value = '';
+
+    updatePaySplitQr();
+    document.getElementById('paySplitModal').classList.remove('hidden');
+    if (window.lucide) window.lucide.createIcons();
+  };
+
+  function updatePaySplitQr() {
+    if (!activePaySplitContext) return;
+    const amtInput = document.getElementById('paySplitCustomAmount');
+    const amt = amtInput && Number(amtInput.value) > 0 ? Number(amtInput.value) : Math.round(activePaySplitContext.remainingPaise / 100);
+
+    const upiUri = `upi://pay?pa=${encodeURIComponent(activePaySplitContext.buyerUpi)}&pn=${encodeURIComponent(activePaySplitContext.buyerName)}&am=${amt}&cu=INR&tn=${encodeURIComponent('Room 12 Split')}`;
+
+    const link = document.getElementById('paySplitMobileUri');
+    if (link) link.href = upiUri;
+
+    const qrContainer = document.getElementById('paySplitQrContainer');
+    if (qrContainer) {
+      qrContainer.innerHTML = '';
+      if (window.QRCode) {
+        new QRCode(qrContainer, {
+          text: upiUri,
+          width: 130,
+          height: 130,
+          colorDark: '#0f172a',
+          colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      }
+    }
+  }
+
+  async function handlePaySplitSubmit(e) {
+    e.preventDefault();
+    if (!activePaySplitContext) return;
+
+    const amt = Number(document.getElementById('paySplitCustomAmount').value);
+    const utr = document.getElementById('paySplitUtrInput').value.trim();
+
+    if (!amt || amt <= 0) {
+      showToast('Please enter a valid amount.');
+      return;
+    }
+
+    const token = localStorage.getItem('roommate_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(PAYMENTS_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          expenseId: activePaySplitContext.expenseId,
+          fromId: activePaySplitContext.splitPersonId,
+          toId: activePaySplitContext.buyerId,
+          amountPaise: Math.round(amt * 100),
+          utr
+        })
+      });
+
+      if (res.ok) {
+        showToast('✅ Payment recorded! Awaiting buyer confirmation.');
+        document.getElementById('paySplitModal').classList.add('hidden');
+        loadExpenses();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to record payment.');
+      }
+    } catch (e) {
+      showToast('Network error recording payment.');
+    }
+  }
+
+  window.confirmSplitPayment = async function (paymentId, action) {
+    const token = localStorage.getItem('roommate_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${PAYMENTS_URL}/${paymentId}/confirm`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action })
+      });
+
+      if (res.ok) {
+        showToast(action === 'confirm' ? '✅ Payment confirmed!' : 'Payment rejected.');
+        loadExpenses();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Action failed.');
+      }
+    } catch (e) {
+      showToast('Network error.');
+    }
+  };
 
 })();
