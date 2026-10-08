@@ -1,27 +1,25 @@
 // Roommate Rent & Light Bill Tracker
-// Client-side Application Logic with In-Website Payment & Receipts
+// Synced with Cloudflare Worker + D1 (shared data for all browsers)
 
 (function () {
   'use strict';
 
-  // Incremented storage key to cleanly load user's new rates & 5 roommates
   const STORAGE_KEY = 'roommate_rent_tracker_v5';
-  const DEFAULT_PIN = '8459';
+  const API_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/state';
+  const VERIFY_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/verify';
 
-  // Exact data configured: Rent 8500, Bldg Maint 500, Room Cleaning 500, Light bill dynamic input
   const defaultData = {
     flatName: 'ROOM NO 12',
     activeMonth: 'October 2026',
     dueNote: 'Due by 5th of every month',
     upiId: '8459807346@slc',
     adminPhone: '918459807346',
-    razorpayKey: '', // Optional: user can enter their free Razorpay Key in Admin
-    adminPin: DEFAULT_PIN,
+    razorpayKey: '',
     bill: {
       roomRent: 8500,
       buildingMaintenance: 500,
       cleaningMaintenance: 500,
-      lightBill: 1000, // Dynamic light bill entered by user each month
+      lightBill: 1000,
       lightMeterPrev: 1250,
       lightMeterCurr: 1355,
       lightRatePerUnit: 9.5
@@ -36,7 +34,6 @@
     history: []
   };
 
-  // Authorized Roommate Accounts
   const AUTH_USERS = [
     { id: 'chirag', display: 'Chirag', pass: 'chirag', roommateId: '4' },
     { id: 'harshal', display: 'Harshal', pass: 'harshal', roommateId: '1' },
@@ -48,22 +45,20 @@
   let appState = loadState();
   let currentLoggedInUser = null;
   let isAdminAuthenticated = false;
+  let adminPinValue = null; // kept in memory only, never stored
   let activePayingRoommate = null;
   let activeReceiptRoommate = null;
 
-  // Detect mobile device reliably
   function isMobileDevice() {
     return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (window.innerWidth <= 768 && ('ontouchstart' in window));
   }
 
-  // Safe Unicode Base64 encoding/decoding (prevents crash on emojis or Indian regional characters)
   function safeUtf8ToBase64(str) {
     try {
       return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function (match, p1) {
         return String.fromCharCode(parseInt(p1, 16));
       }));
     } catch (e) {
-      console.warn('Base64 encoding fallback:', e);
       return btoa(unescape(encodeURIComponent(str)));
     }
   }
@@ -74,38 +69,42 @@
         return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
       }).join(''));
     } catch (e) {
-      console.warn('Base64 decoding fallback:', e);
       return decodeURIComponent(escape(atob(str)));
     }
   }
 
-  // Initialize DOM on Load
+  // Shared bill maths (used everywhere)
+  function getTotals() {
+    const rent = Number(appState.bill.roomRent) || 8500;
+    const bldgMaint = Number(appState.bill.buildingMaintenance) || 500;
+    const cleanMaint = Number(appState.bill.cleaningMaintenance) || 500;
+    const light = Number(appState.bill.lightBill) || 0;
+    const total = rent + bldgMaint + cleanMaint + light;
+    const count = appState.roommates.length || 5;
+    const perHead = Math.round(total / count);
+    return { rent, bldgMaint, cleanMaint, light, total, count, perHead };
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     checkUrlForSharedData();
     initMonthSelector();
     initAuth();
     renderAll();
     setupEventListeners();
-    loadDataJson();
+    loadRemoteState();
   });
 
-  // Load state from URL hash or LocalStorage
+  // ---------- STATE: local cache + Cloudflare server ----------
+
   function loadState() {
     try {
       const stored = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('roommate_rent_tracker_v4');
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed.adminPin === '1234' || !parsed.adminPin) {
-          parsed.adminPin = DEFAULT_PIN;
-        }
-        if (parsed.flatName === 'Flat Bills' || !parsed.flatName) {
-          parsed.flatName = 'ROOM NO 12';
-        }
         return {
           ...defaultData,
           ...parsed,
           flatName: (parsed.flatName === 'Flat Bills' || !parsed.flatName) ? 'ROOM NO 12' : parsed.flatName,
-          adminPin: parsed.adminPin === '1234' ? DEFAULT_PIN : (parsed.adminPin || DEFAULT_PIN),
           bill: { ...defaultData.bill, ...(parsed.bill || {}) },
           roommates: Array.isArray(parsed.roommates) && parsed.roommates.length > 0 ? parsed.roommates : defaultData.roommates
         };
@@ -122,25 +121,74 @@
     } catch (e) {
       console.error('Error saving state to localStorage', e);
     }
+    pushRemoteState();
   }
 
-  // URL Hash state loader (Allows roommates to get latest data from WhatsApp link)
+  // Only the admin (who typed the correct PIN) can save to the server
+  async function pushRemoteState() {
+    if (!isAdminAuthenticated || !adminPinValue) return;
+    const { adminPin, ...dataToSave } = appState; // never upload any PIN
+    try {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Pin': adminPinValue },
+        body: JSON.stringify(dataToSave)
+      });
+      if (res.status === 401) showToast('Wrong PIN. Not saved to server.');
+      else if (!res.ok) showToast('Server save failed. Try again.');
+      else showToast('Saved to server for everyone.');
+    } catch (e) {
+      showToast('No internet. Saved on this device only.');
+    }
+  }
+
+  async function verifyAdminPin(pin) {
+    try {
+      const res = await fetch(VERIFY_URL, { method: 'POST', headers: { 'X-Admin-Pin': pin } });
+      return res.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function loadRemoteState() {
+    try {
+      const res = await fetch(API_URL + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) return;
+      const remoteData = await res.json();
+      if (remoteData && remoteData.bill) {
+        appState = {
+          ...defaultData,
+          ...appState,
+          ...remoteData,
+          flatName: remoteData.flatName || appState.flatName || 'ROOM NO 12',
+          bill: { ...defaultData.bill, ...appState.bill, ...(remoteData.bill || {}) },
+          roommates: Array.isArray(remoteData.roommates) && remoteData.roommates.length > 0
+            ? remoteData.roommates
+            : appState.roommates
+        };
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appState)); } catch (e) {}
+        renderAll();
+      }
+    } catch (e) {
+      console.warn('Server load failed:', e);
+    }
+  }
+
+  // Old WhatsApp share links (#data=...) still work
   function checkUrlForSharedData() {
     try {
       if (window.location.hash && window.location.hash.startsWith('#data=')) {
         const rawB64 = window.location.hash.replace('#data=', '');
-        const jsonStr = safeBase64ToUtf8(rawB64);
-        const sharedData = JSON.parse(jsonStr);
+        const sharedData = JSON.parse(safeBase64ToUtf8(rawB64));
 
         if (sharedData && sharedData.bill && Array.isArray(sharedData.roommates)) {
-          // Merge while keeping admin PIN local if exists
           appState = {
             ...appState,
             ...sharedData,
-            bill: { ...defaultData.bill, ...(sharedData.bill || {}) },
-            adminPin: appState.adminPin || DEFAULT_PIN
+            bill: { ...defaultData.bill, ...(sharedData.bill || {}) }
           };
-          saveState();
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appState)); } catch (e) {}
 
           const banner = document.getElementById('syncBanner');
           const bannerMsg = document.getElementById('syncBannerMsg');
@@ -148,7 +196,6 @@
             bannerMsg.textContent = `Latest bills loaded for ${appState.activeMonth}!`;
             banner.classList.remove('hidden');
           }
-          // Clear hash cleanly from URL without page reload
           history.replaceState(null, document.title, window.location.pathname + window.location.search);
         }
       }
@@ -157,7 +204,8 @@
     }
   }
 
-  // Authentication & Session Management
+  // ---------- AUTH (roommate login) ----------
+
   function initAuth() {
     try {
       const stored = localStorage.getItem('roommate_logged_in_user');
@@ -178,7 +226,6 @@
       console.warn('Error restoring user session:', e);
     }
 
-    // Default: Show login screen if not authenticated
     const loginScreen = document.getElementById('loginScreen');
     if (loginScreen) loginScreen.classList.remove('hidden');
     updateUserHeaderBadge();
@@ -204,7 +251,6 @@
 
       const loginScreen = document.getElementById('loginScreen');
       if (loginScreen) loginScreen.classList.add('hidden');
-
       const errorMsg = document.getElementById('loginErrorMsg');
       if (errorMsg) errorMsg.classList.add('hidden');
 
@@ -223,6 +269,7 @@
     currentLoggedInUser = null;
     localStorage.removeItem('roommate_logged_in_user');
     isAdminAuthenticated = false;
+    adminPinValue = null;
 
     const loginScreen = document.getElementById('loginScreen');
     if (loginScreen) {
@@ -259,56 +306,28 @@
     const passField = document.getElementById('loginPassword');
     const err = document.getElementById('loginErrorMsg');
     if (err) err.classList.add('hidden');
-
-    if (userField) {
-      userField.value = name;
-    }
-    if (passField) {
-      passField.focus();
-    }
+    if (userField) userField.value = name;
+    if (passField) passField.focus();
   };
 
-  // Load data.json from server if present (for permanent cross-device sync)
-  async function loadDataJson() {
-    try {
-      const res = await fetch('data.json?t=' + Date.now(), { cache: 'no-store' });
-      if (res.ok) {
-        const remoteData = await res.json();
-        if (remoteData && remoteData.bill) {
-          appState = {
-            ...defaultData,
-            ...appState,
-            ...remoteData,
-            flatName: remoteData.flatName || appState.flatName || 'ROOM NO 12',
-            bill: { ...defaultData.bill, ...appState.bill, ...(remoteData.bill || {}) },
-            roommates: Array.isArray(remoteData.roommates) && remoteData.roommates.length > 0
-              ? remoteData.roommates
-              : appState.roommates,
-            adminPin: appState.adminPin || DEFAULT_PIN
-          };
-          saveState();
-          renderAll();
-        }
-      }
-    } catch (e) {
-      console.warn('data.json check:', e);
-    }
+  // ---------- EXPORT / SHARE ----------
+
+  function exportPayload() {
+    return {
+      flatName: appState.flatName || 'ROOM NO 12',
+      activeMonth: appState.activeMonth,
+      dueNote: appState.dueNote,
+      upiId: appState.upiId,
+      adminPhone: appState.adminPhone,
+      razorpayKey: appState.razorpayKey,
+      bill: appState.bill,
+      roommates: appState.roommates
+    };
   }
 
   function downloadDataJson() {
     try {
-      const exportData = {
-        flatName: appState.flatName || 'ROOM NO 12',
-        activeMonth: appState.activeMonth,
-        dueNote: appState.dueNote,
-        upiId: appState.upiId,
-        adminPhone: appState.adminPhone,
-        razorpayKey: appState.razorpayKey,
-        bill: appState.bill,
-        roommates: appState.roommates
-      };
-      const jsonStr = JSON.stringify(exportData, null, 2);
-      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -317,56 +336,31 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showToast('data.json downloaded! Upload it to your GitHub repository to update all browsers permanently.');
+      showToast('Backup data.json downloaded.');
     } catch (err) {
       console.error('Error generating data.json download:', err);
     }
   }
 
-  // Generate URL that encodes full current state
   function getShareableUrl() {
-    try {
-      const exportData = {
-        flatName: appState.flatName,
-        activeMonth: appState.activeMonth,
-        dueNote: appState.dueNote,
-        upiId: appState.upiId,
-        adminPhone: appState.adminPhone,
-        razorpayKey: appState.razorpayKey,
-        bill: appState.bill,
-        roommates: appState.roommates
-      };
-      const jsonStr = JSON.stringify(exportData);
-      const b64 = safeUtf8ToBase64(jsonStr);
-      const base = window.location.origin + window.location.pathname;
-      return `${base}#data=${b64}`;
-    } catch (e) {
-      console.error('Failed to create share link', e);
-      return window.location.href;
-    }
+    // The site now loads shared data from the server, so a plain link is enough
+    return window.location.origin + window.location.pathname;
   }
 
-  // Month selector options
+  // ---------- MONTH SELECTOR ----------
+
   function initMonthSelector() {
     const monthSelect = document.getElementById('monthSelect');
     if (!monthSelect) return;
 
-    const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    const currDate = new Date();
-    const currYear = currDate.getFullYear();
+    const months = ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'];
+    const currYear = new Date().getFullYear();
 
     const options = [];
     for (let y = currYear; y <= currYear + 1; y++) {
-      for (let m = 0; m < 12; m++) {
-        const str = `${months[m]} ${y}`;
-        options.push(str);
-      }
+      for (let m = 0; m < 12; m++) options.push(`${months[m]} ${y}`);
     }
-
-    // Ensure currently selected month is included
     if (appState.activeMonth && !options.includes(appState.activeMonth)) {
       options.unshift(appState.activeMonth);
     }
@@ -377,6 +371,11 @@
     }).join('');
 
     monthSelect.addEventListener('change', (e) => {
+      if (!isAdminAuthenticated) {
+        showToast('Only admin can change the month.');
+        monthSelect.value = appState.activeMonth;
+        return;
+      }
       appState.activeMonth = e.target.value;
       const adminMonthInput = document.getElementById('inputAdminMonth');
       if (adminMonthInput) adminMonthInput.value = e.target.value;
@@ -385,7 +384,6 @@
     });
   }
 
-  // Build standard UPI URI for payments
   function buildUpiUri(amount, roommateName) {
     const upiId = appState.upiId || '8459807346@slc';
     const note = encodeURIComponent(`${roommateName} ${appState.activeMonth} Rent & Bills`);
@@ -393,66 +391,49 @@
     return `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${name}&am=${amount}&tn=${note}&cu=INR`;
   }
 
-  // Main Render Function
+  // ---------- RENDER ----------
+
   function renderAll() {
-    const rent = Number(appState.bill.roomRent) || 8500;
-    const bldgMaint = Number(appState.bill.buildingMaintenance) || 500;
-    const cleanMaint = Number(appState.bill.cleaningMaintenance) || 500;
-    const light = Number(appState.bill.lightBill) || 0;
-    const total = rent + bldgMaint + cleanMaint + light;
-    const count = appState.roommates.length || 5;
-    const perHead = Math.round(total / count);
+    const { rent, bldgMaint, cleanMaint, light, total, count, perHead } = getTotals();
+    const $ = (id) => document.getElementById(id);
+    const inr = (n) => `₹${n.toLocaleString('en-IN')}`;
 
-    // Header & Titles
-    document.getElementById('headerFlatName').textContent = appState.flatName;
-    document.getElementById('headerMonthBadge').textContent = appState.activeMonth;
-    document.getElementById('activeMonthTitle').textContent = appState.activeMonth;
-    document.getElementById('dueDateNotice').textContent = appState.dueNote || 'Due by 5th of every month';
-    document.getElementById('breakdownMonth').textContent = appState.activeMonth;
+    $('headerFlatName').textContent = appState.flatName;
+    $('headerMonthBadge').textContent = appState.activeMonth;
+    $('activeMonthTitle').textContent = appState.activeMonth;
+    $('dueDateNotice').textContent = appState.dueNote || 'Due by 5th of every month';
+    $('breakdownMonth').textContent = appState.activeMonth;
 
-    // Overview Stats
-    document.getElementById('statRentTotal').textContent = `₹${rent.toLocaleString('en-IN')}`;
-    document.getElementById('statMaintenanceTotal').textContent = `₹${(bldgMaint + cleanMaint).toLocaleString('en-IN')}`;
-    document.getElementById('statMaintenanceSubtext').textContent = `₹${bldgMaint} bldg + ₹${cleanMaint} clean`;
-    document.getElementById('statLightTotal').textContent = `₹${light.toLocaleString('en-IN')}`;
-    document.getElementById('statPerPerson').textContent = `₹${perHead.toLocaleString('en-IN')}`;
-    document.getElementById('statRoommateCount').textContent = `for ${count} roommates`;
+    $('statRentTotal').textContent = inr(rent);
+    $('statMaintenanceTotal').textContent = inr(bldgMaint + cleanMaint);
+    $('statMaintenanceSubtext').textContent = `₹${bldgMaint} bldg + ₹${cleanMaint} clean`;
+    $('statLightTotal').textContent = inr(light);
+    $('statPerPerson').textContent = inr(perHead);
+    $('statRoommateCount').textContent = `for ${count} roommates`;
 
-    // Detailed Breakdown List
-    document.getElementById('detailRent').textContent = `₹${rent.toLocaleString('en-IN')}`;
-    document.getElementById('detailBuildingMaint').textContent = `₹${bldgMaint.toLocaleString('en-IN')}`;
-    document.getElementById('detailCleaningMaint').textContent = `₹${cleanMaint.toLocaleString('en-IN')}`;
-    document.getElementById('detailLight').textContent = `₹${light.toLocaleString('en-IN')}`;
-    document.getElementById('detailGrandTotal').textContent = `₹${total.toLocaleString('en-IN')}`;
-    document.getElementById('detailSplitPerHead').textContent = `₹${perHead.toLocaleString('en-IN')} / person`;
+    $('detailRent').textContent = inr(rent);
+    $('detailBuildingMaint').textContent = inr(bldgMaint);
+    $('detailCleaningMaint').textContent = inr(cleanMaint);
+    $('detailLight').textContent = inr(light);
+    $('detailGrandTotal').textContent = inr(total);
+    $('detailSplitPerHead').textContent = `${inr(perHead)} / person`;
 
-    // Admin Inputs
-    document.getElementById('inputRoomRent').value = appState.bill.roomRent;
-    document.getElementById('inputBuildingMaint').value = appState.bill.buildingMaintenance;
-    document.getElementById('inputCleaningMaint').value = appState.bill.cleaningMaintenance;
-    document.getElementById('inputLightBill').value = appState.bill.lightBill;
-    document.getElementById('inputUpiId').value = appState.upiId || '8459807346@slc';
-    document.getElementById('inputAdminPhone').value = appState.adminPhone || '';
-    document.getElementById('inputRazorpayKey').value = appState.razorpayKey || '';
+    $('inputRoomRent').value = appState.bill.roomRent;
+    $('inputBuildingMaint').value = appState.bill.buildingMaintenance;
+    $('inputCleaningMaint').value = appState.bill.cleaningMaintenance;
+    $('inputLightBill').value = appState.bill.lightBill;
+    $('inputUpiId').value = appState.upiId || '8459807346@slc';
+    $('inputAdminPhone').value = appState.adminPhone || '';
+    $('inputRazorpayKey').value = appState.razorpayKey || '';
 
-    if (document.getElementById('inputDueNote')) {
-      document.getElementById('inputDueNote').value = appState.dueNote || 'Due by 5th of every month';
-    }
+    if ($('inputDueNote')) $('inputDueNote').value = appState.dueNote || 'Due by 5th of every month';
+    if ($('inputAdminMonth')) $('inputAdminMonth').value = appState.activeMonth;
 
-    if (document.getElementById('inputAdminMonth')) {
-      document.getElementById('inputAdminMonth').value = appState.activeMonth;
-    }
-
-    // Sync top month selector dropdown
-    const monthSelect = document.getElementById('monthSelect');
+    const monthSelect = $('monthSelect');
     if (monthSelect) {
-      // If active month is not in options, append it
       let exists = false;
       for (let i = 0; i < monthSelect.options.length; i++) {
-        if (monthSelect.options[i].value === appState.activeMonth) {
-          exists = true;
-          break;
-        }
+        if (monthSelect.options[i].value === appState.activeMonth) { exists = true; break; }
       }
       if (!exists && appState.activeMonth) {
         const opt = document.createElement('option');
@@ -464,26 +445,15 @@
       monthSelect.value = appState.activeMonth;
     }
 
-    // Prefill unit calculator fields
-    if (document.getElementById('calcPrevUnits') && !document.getElementById('calcPrevUnits').value) {
-      document.getElementById('calcPrevUnits').value = appState.bill.lightMeterPrev || '';
-    }
-    if (document.getElementById('calcCurrUnits') && !document.getElementById('calcCurrUnits').value) {
-      document.getElementById('calcCurrUnits').value = appState.bill.lightMeterCurr || '';
-    }
-    if (document.getElementById('calcRatePerUnit') && !document.getElementById('calcRatePerUnit').value) {
-      document.getElementById('calcRatePerUnit').value = appState.bill.lightRatePerUnit || 9.5;
-    }
+    if ($('calcPrevUnits') && !$('calcPrevUnits').value) $('calcPrevUnits').value = appState.bill.lightMeterPrev || '';
+    if ($('calcCurrUnits') && !$('calcCurrUnits').value) $('calcCurrUnits').value = appState.bill.lightMeterCurr || '';
+    if ($('calcRatePerUnit') && !$('calcRatePerUnit').value) $('calcRatePerUnit').value = appState.bill.lightRatePerUnit || 9.5;
 
-    document.getElementById('adminRoommateCount').textContent = appState.roommates.length;
+    $('adminRoommateCount').textContent = appState.roommates.length;
 
-    // Render Roommate Cards
     renderRoommateCards(perHead);
 
-    // Refresh Lucide Icons
-    if (window.lucide) {
-      window.lucide.createIcons();
-    }
+    if (window.lucide) window.lucide.createIcons();
   }
 
   function renderRoommateCards(perHead) {
@@ -499,13 +469,12 @@
 
       const statusBadge = isPaid
         ? `<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-             <i data-lucide="check" class="w-3.5 h-3.5"></i> Paid ${r.paidOn ? `(${r.paidOn})` : ''}
+             <i data-lucide="check" class="w-3.5 h-3.5"></i> Paid ${r.paidOn ? `(${escapeHtml(r.paidOn)})` : ''}
            </span>`
         : `<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
              <i data-lucide="clock" class="w-3.5 h-3.5"></i> Pending
            </span>`;
 
-      // Admin quick toggle button
       const adminActions = isAdminAuthenticated ? `
         <div class="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-xs">
           <div class="flex items-center gap-1.5 text-slate-400 font-medium truncate max-w-[200px]">
@@ -531,7 +500,7 @@
           <div class="flex items-start justify-between gap-3">
             <div class="flex items-center gap-3">
               <div class="w-11 h-11 rounded-xl ${isCurrentUser ? 'bg-emerald-600 text-white shadow-emerald-500/30' : (isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')} font-bold flex items-center justify-center text-sm shadow-sm">
-                ${r.name.charAt(0).toUpperCase()}
+                ${escapeHtml(r.name.charAt(0).toUpperCase())}
               </div>
               <div>
                 <div class="flex items-center gap-1.5 flex-wrap">
@@ -569,14 +538,13 @@
       `;
     }).join('');
 
-    // Update Counter Badges
     document.getElementById('badgePaidCount').textContent = `${paidCount} Paid`;
     document.getElementById('badgePendingCount').textContent = `${pendingCount} Pending`;
   }
 
-  // Setup Event Listeners
+  // ---------- EVENT LISTENERS ----------
+
   function setupEventListeners() {
-    // Admin Toggle
     const adminToggleBtn = document.getElementById('adminToggleBtn');
     const adminPanel = document.getElementById('adminPanel');
     const closeAdminBtn = document.getElementById('closeAdminBtn');
@@ -596,13 +564,15 @@
       adminPanel.classList.add('hidden');
     });
 
-    // Admin PIN Submit
+    // Admin PIN is verified by the Cloudflare Worker (ADMIN_PIN secret)
     const adminPinSubmitBtn = document.getElementById('adminPinSubmitBtn');
     const adminPinInput = document.getElementById('adminPinInput');
 
-    const handlePinVerify = () => {
+    const handlePinVerify = async () => {
       const pin = adminPinInput.value.trim();
-      if (pin === (appState.adminPin || DEFAULT_PIN)) {
+      const ok = await verifyAdminPin(pin);
+      if (ok) {
+        adminPinValue = pin;
         isAdminAuthenticated = true;
         document.getElementById('adminPinModal').classList.add('hidden');
         document.getElementById('adminPanel').classList.remove('hidden');
@@ -620,9 +590,13 @@
       if (e.key === 'Enter') handlePinVerify();
     });
 
-    // Bill Form Submit
+    // Bill form
     document.getElementById('billForm').addEventListener('submit', (e) => {
       e.preventDefault();
+      if (!isAdminAuthenticated) {
+        showToast('Only admin can save changes.');
+        return;
+      }
       appState.bill.roomRent = Number(document.getElementById('inputRoomRent').value) || 0;
       appState.bill.buildingMaintenance = Number(document.getElementById('inputBuildingMaint').value) || 0;
       appState.bill.cleaningMaintenance = Number(document.getElementById('inputCleaningMaint').value) || 0;
@@ -632,26 +606,23 @@
       appState.razorpayKey = document.getElementById('inputRazorpayKey').value.trim();
 
       const newMonth = document.getElementById('inputAdminMonth') ? document.getElementById('inputAdminMonth').value.trim() : '';
-      if (newMonth) {
-        appState.activeMonth = newMonth;
-      }
+      if (newMonth) appState.activeMonth = newMonth;
 
       const newDue = document.getElementById('inputDueNote') ? document.getElementById('inputDueNote').value.trim() : '';
-      if (newDue) {
-        appState.dueNote = newDue;
-      }
+      if (newDue) appState.dueNote = newDue;
 
-      const newPin = document.getElementById('inputAdminPinChange').value.trim();
-      if (newPin && newPin.length >= 4) {
-        appState.adminPin = newPin;
+      // Admin PIN is now changed only in Cloudflare (ADMIN_PIN secret)
+      const pinBox = document.getElementById('inputAdminPinChange');
+      if (pinBox && pinBox.value.trim()) {
+        showToast('To change the PIN, edit the ADMIN_PIN secret in Cloudflare.');
+        pinBox.value = '';
       }
 
       saveState();
       renderAll();
-      showToast('Saved! Use WhatsApp button or Download data.json to sync with roommates.');
     });
 
-    // Light Calculator Toggle & Apply
+    // Light calculator
     const toggleLightCalcBtn = document.getElementById('toggleLightCalcBtn');
     const lightCalcSection = document.getElementById('lightCalcSection');
     toggleLightCalcBtn.addEventListener('click', () => {
@@ -680,25 +651,19 @@
       }
     });
 
-    // Share Link Button
+    // Share link
     document.getElementById('copyShareLinkBtn').addEventListener('click', () => {
       const shareUrl = getShareableUrl();
       navigator.clipboard.writeText(shareUrl).then(() => {
-        showToast('Sharable link copied to clipboard! Roommates will see latest bills.');
+        showToast('Website link copied! Roommates will see the latest bills.');
       }).catch(() => {
         prompt('Copy this link to share with roommates:', shareUrl);
       });
     });
 
-    // WhatsApp Share Button
+    // WhatsApp share
     document.getElementById('whatsappShareBtn').addEventListener('click', () => {
-      const rent = Number(appState.bill.roomRent) || 8500;
-      const bldgMaint = Number(appState.bill.buildingMaintenance) || 500;
-      const cleanMaint = Number(appState.bill.cleaningMaintenance) || 500;
-      const light = Number(appState.bill.lightBill) || 0;
-      const total = rent + bldgMaint + cleanMaint + light;
-      const count = appState.roommates.length || 5;
-      const perHead = Math.round(total / count);
+      const { rent, bldgMaint, cleanMaint, light, total, count, perHead } = getTotals();
       const shareUrl = getShareableUrl();
 
       let text = `🏠 *Room Rent & Light Bill Breakdown - ${appState.activeMonth}*\n`;
@@ -717,16 +682,13 @@
       });
 
       text += `\n📱 *Pay via UPI ID:* ${appState.upiId || '8459807346@slc'}\n`;
-      if (appState.dueNote) {
-        text += `⏰ *Notice:* ${appState.dueNote}\n`;
-      }
+      if (appState.dueNote) text += `⏰ *Notice:* ${appState.dueNote}\n`;
       text += `\n💳 *Pay Directly on Website:* ${shareUrl}`;
 
-      const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-      window.open(waUrl, '_blank');
+      window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
     });
 
-    // Roommate Modal
+    // Roommate management
     document.getElementById('manageRoommatesModalBtn').addEventListener('click', () => {
       renderManageRoommatesList();
       document.getElementById('roommatesModal').classList.remove('hidden');
@@ -734,6 +696,10 @@
 
     document.getElementById('addRoommateForm').addEventListener('submit', (e) => {
       e.preventDefault();
+      if (!isAdminAuthenticated) {
+        showToast('Only admin can add roommates.');
+        return;
+      }
       const input = document.getElementById('newRoommateName');
       const name = input.value.trim();
       if (name) {
@@ -753,12 +719,11 @@
       }
     });
 
-    // Hosting Guide Modal
     document.getElementById('viewHostingGuideBtn').addEventListener('click', () => {
       document.getElementById('hostingGuideModal').classList.remove('hidden');
     });
 
-    // Checkout Tabs Switching
+    // Checkout tabs
     const tabUpiBtn = document.getElementById('tabUpiBtn');
     const tabGatewayBtn = document.getElementById('tabGatewayBtn');
     const tabContentUpi = document.getElementById('tabContentUpi');
@@ -782,7 +747,6 @@
       tabContentUpi.classList.add('hidden');
     });
 
-    // Copy UPI ID in checkout modal
     document.getElementById('copyUpiIdBtn').addEventListener('click', () => {
       const upiId = appState.upiId || '8459807346@slc';
       navigator.clipboard.writeText(upiId).then(() => {
@@ -790,29 +754,20 @@
       });
     });
 
-    // UTR Confirmation Form Submission
+    // UTR confirmation
     document.getElementById('utrConfirmForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const utr = document.getElementById('inputUtrNumber').value.trim();
       if (!utr) return;
-
       if (activePayingRoommate) {
         completePayment(activePayingRoommate.id, utr, 'UPI Transfer');
       }
     });
 
-    // Razorpay Launch Button
+    // Razorpay
     document.getElementById('btnLaunchRazorpay').addEventListener('click', () => {
       if (!activePayingRoommate) return;
-
-      const rent = Number(appState.bill.roomRent) || 8500;
-      const bldgMaint = Number(appState.bill.buildingMaintenance) || 500;
-      const cleanMaint = Number(appState.bill.cleaningMaintenance) || 500;
-      const light = Number(appState.bill.lightBill) || 0;
-      const total = rent + bldgMaint + cleanMaint + light;
-      const count = appState.roommates.length || 5;
-      const perHead = Math.round(total / count);
-
+      const { perHead } = getTotals();
       const razorpayKey = appState.razorpayKey;
 
       if (!razorpayKey) {
@@ -833,7 +788,7 @@
 
       const options = {
         key: razorpayKey,
-        amount: perHead * 100, // paise
+        amount: perHead * 100,
         currency: 'INR',
         name: appState.flatName,
         description: `${appState.activeMonth} Rent & Electricity Bill`,
@@ -843,12 +798,8 @@
             completePayment(activePayingRoommate.id, response.razorpay_payment_id, 'Razorpay Online');
           }
         },
-        prefill: {
-          name: activePayingRoommate.name,
-        },
-        theme: {
-          color: '#16a34a'
-        }
+        prefill: { name: activePayingRoommate.name },
+        theme: { color: '#16a34a' }
       };
 
       try {
@@ -860,17 +811,10 @@
       }
     });
 
-    // Send Proof via WhatsApp
+    // Send receipt via WhatsApp
     document.getElementById('sendProofWhatsAppBtn').addEventListener('click', () => {
       if (!activeReceiptRoommate) return;
-
-      const rent = Number(appState.bill.roomRent) || 8500;
-      const bldgMaint = Number(appState.bill.buildingMaintenance) || 500;
-      const cleanMaint = Number(appState.bill.cleaningMaintenance) || 500;
-      const light = Number(appState.bill.lightBill) || 0;
-      const total = rent + bldgMaint + cleanMaint + light;
-      const count = appState.roommates.length || 5;
-      const perHead = Math.round(total / count);
+      const { perHead } = getTotals();
 
       let msg = `🧾 *RENT & BILL PAYMENT RECEIPT*\n`;
       msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -888,85 +832,63 @@
         const cleanPhone = appState.adminPhone.replace(/\D/g, '');
         targetUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
       }
-
       window.open(targetUrl, '_blank');
     });
 
-    // Login Form Submit
+    // Login form
     const loginForm = document.getElementById('loginForm');
     if (loginForm) {
       loginForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        const u = document.getElementById('loginUsername').value;
-        const p = document.getElementById('loginPassword').value;
-        handleLogin(u, p);
+        handleLogin(
+          document.getElementById('loginUsername').value,
+          document.getElementById('loginPassword').value
+        );
       });
     }
 
-    // Toggle Login Password Visibility
     const toggleLoginPassBtn = document.getElementById('toggleLoginPasswordBtn');
     if (toggleLoginPassBtn) {
       toggleLoginPassBtn.addEventListener('click', () => {
         const pass = document.getElementById('loginPassword');
-        if (pass) {
-          pass.type = pass.type === 'password' ? 'text' : 'password';
-        }
+        if (pass) pass.type = pass.type === 'password' ? 'text' : 'password';
       });
     }
 
-    // Logout Button
     const logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) {
       logoutBtn.addEventListener('click', () => {
-        if (confirm('Are you sure you want to log out?')) {
-          handleLogout();
-        }
+        if (confirm('Are you sure you want to log out?')) handleLogout();
       });
     }
 
-    // Download data.json button
     const downloadDataJsonBtn = document.getElementById('downloadDataJsonBtn');
     if (downloadDataJsonBtn) {
       downloadDataJsonBtn.addEventListener('click', downloadDataJson);
     }
   }
 
-  // Handle click on Roommate card: on mobile, auto-redirects directly to UPI app!
+  // ---------- PAYMENTS ----------
+
   window.handlePaymentRedirectClick = function (event, id) {
     const roommate = appState.roommates.find(r => r.id === id);
     if (!roommate) return;
 
     activePayingRoommate = roommate;
-
-    const rent = Number(appState.bill.roomRent) || 8500;
-    const bldgMaint = Number(appState.bill.buildingMaintenance) || 500;
-    const cleanMaint = Number(appState.bill.cleaningMaintenance) || 500;
-    const light = Number(appState.bill.lightBill) || 0;
-    const total = rent + bldgMaint + cleanMaint + light;
-    const count = appState.roommates.length || 5;
-    const perHead = Math.round(total / count);
-
+    const { perHead } = getTotals();
     const upiUri = buildUpiUri(perHead, roommate.name);
 
-    if (isMobileDevice()) {
-      // Clean single redirect without double navigation collision
-      event.preventDefault();
-      setupCheckoutModalUI(roommate, perHead, upiUri);
-      document.getElementById('checkoutModal').classList.remove('hidden');
+    event.preventDefault();
+    setupCheckoutModalUI(roommate, perHead, upiUri);
+    document.getElementById('checkoutModal').classList.remove('hidden');
 
-      setTimeout(() => {
-        window.location.href = upiUri;
-      }, 150);
-    } else {
-      event.preventDefault();
-      setupCheckoutModalUI(roommate, perHead, upiUri);
-      document.getElementById('checkoutModal').classList.remove('hidden');
+    if (isMobileDevice()) {
+      setTimeout(() => { window.location.href = upiUri; }, 150);
     }
 
     if (window.lucide) window.lucide.createIcons();
   };
 
-  // Setup the Checkout Modal UI
   function setupCheckoutModalUI(roommate, perHead, upiUri) {
     const upiId = appState.upiId || '8459807346@slc';
 
@@ -977,13 +899,10 @@
     document.getElementById('btnLaunchRazorpayText').textContent = `Pay ₹${perHead.toLocaleString('en-IN')} with Razorpay`;
     document.getElementById('inputUtrNumber').value = '';
 
-    // Direct app buttons in modal
     const btnDirect = document.getElementById('btnPayDirectAll');
     btnDirect.href = upiUri;
     btnDirect.onclick = function (e) {
-      if (isMobileDevice()) {
-        // allow native link navigation
-      } else {
+      if (!isMobileDevice()) {
         e.preventDefault();
         showToast('UPI app redirect is available on mobile phones. Please scan the QR code above.');
       }
@@ -993,7 +912,6 @@
     document.getElementById('btnPayPhonePe').href = upiUri;
     document.getElementById('btnPayPaytm').href = upiUri;
 
-    // Generate dynamic QR Code for fallback container if Slice QR image fails to load
     const qrContainer = document.getElementById('qrcodeContainer');
     if (qrContainer) {
       qrContainer.innerHTML = '';
@@ -1009,11 +927,9 @@
       }
     }
 
-    // Default to UPI tab
     document.getElementById('tabUpiBtn').click();
   }
 
-  // Complete Payment Action (Shared by UPI UTR submission and Razorpay)
   function completePayment(roommateId, referenceId, method) {
     const roommate = appState.roommates.find(r => r.id === roommateId);
     if (!roommate) return;
@@ -1028,27 +944,18 @@
     roommate.utr = referenceId;
     roommate.method = method;
 
-    saveState();
+    saveState(); // saved to server only if admin; otherwise this device only
     renderAll();
 
-    // Trigger celebratory confetti 🎉
     if (window.confetti) {
-      window.confetti({
-        particleCount: 80,
-        spread: 60,
-        origin: { y: 0.6 }
-      });
+      window.confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
     }
 
-    // Hide checkout modal
     document.getElementById('checkoutModal').classList.add('hidden');
-
-    // Open receipt modal
     window.openReceiptModal(roommate.id);
     showToast(`Payment recorded for ${roommate.name}!`);
   }
 
-  // Render Roommates in Management Modal
   function renderManageRoommatesList() {
     const list = document.getElementById('manageRoommatesList');
     if (!list) return;
@@ -1059,7 +966,7 @@
           <span class="w-6 h-6 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-xs font-bold">${idx + 1}</span>
           <div>
             <p class="text-sm font-semibold text-slate-800 leading-tight">${escapeHtml(r.name)}</p>
-            <p class="text-[11px] text-slate-400">${r.status === 'paid' ? `Paid (${r.paidOn || 'Yes'})` : 'Pending'}</p>
+            <p class="text-[11px] text-slate-400">${r.status === 'paid' ? `Paid (${escapeHtml(r.paidOn || 'Yes')})` : 'Pending'}</p>
           </div>
         </div>
         <button onclick="window.removeRoommate('${r.id}')" class="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 hover:bg-red-50 rounded-lg">
@@ -1069,7 +976,6 @@
     `).join('');
   }
 
-  // Global functions attached to window for HTML event handlers
   window.toggleRoommateStatus = function (id) {
     if (!isAdminAuthenticated) return;
     const roommate = appState.roommates.find(r => r.id === id);
@@ -1095,6 +1001,10 @@
   };
 
   window.removeRoommate = function (id) {
+    if (!isAdminAuthenticated) {
+      showToast('Only admin can remove roommates.');
+      return;
+    }
     if (appState.roommates.length <= 1) {
       alert('You need at least 1 roommate.');
       return;
@@ -1105,21 +1015,12 @@
     renderAll();
   };
 
-  // Open Checkout Modal
   window.openCheckoutModal = function (id) {
     const roommate = appState.roommates.find(r => r.id === id);
     if (!roommate) return;
 
     activePayingRoommate = roommate;
-
-    const rent = Number(appState.bill.roomRent) || 8500;
-    const bldgMaint = Number(appState.bill.buildingMaintenance) || 500;
-    const cleanMaint = Number(appState.bill.cleaningMaintenance) || 500;
-    const light = Number(appState.bill.lightBill) || 0;
-    const total = rent + bldgMaint + cleanMaint + light;
-    const count = appState.roommates.length || 5;
-    const perHead = Math.round(total / count);
-
+    const { perHead } = getTotals();
     const upiUri = buildUpiUri(perHead, roommate.name);
     setupCheckoutModalUI(roommate, perHead, upiUri);
     document.getElementById('checkoutModal').classList.remove('hidden');
@@ -1127,49 +1028,36 @@
     if (window.lucide) window.lucide.createIcons();
   };
 
-  // Open Digital Receipt Modal
   window.openReceiptModal = function (id) {
     const roommate = appState.roommates.find(r => r.id === id);
     if (!roommate) return;
 
     activeReceiptRoommate = roommate;
-
-    const rent = Number(appState.bill.roomRent) || 8500;
-    const bldgMaint = Number(appState.bill.buildingMaintenance) || 500;
-    const cleanMaint = Number(appState.bill.cleaningMaintenance) || 500;
-    const light = Number(appState.bill.lightBill) || 0;
-    const total = rent + bldgMaint + cleanMaint + light;
-    const count = appState.roommates.length || 5;
-    const perHead = Math.round(total / count);
+    const { rent, bldgMaint, cleanMaint, light, perHead } = getTotals();
+    const $ = (i) => document.getElementById(i);
+    const inr = (n) => `₹${n.toLocaleString('en-IN')}`;
 
     const receiptNum = `REC-${appState.activeMonth.replace(/\s+/g, '').substring(0, 5).toUpperCase()}-${roommate.id.slice(-4)}`;
 
-    document.getElementById('receiptNumber').textContent = receiptNum;
-    document.getElementById('receiptAmount').textContent = `₹${perHead.toLocaleString('en-IN')}`;
-    document.getElementById('receiptMonthYear').textContent = appState.activeMonth;
-    document.getElementById('receiptRoommateName').textContent = roommate.name;
-    document.getElementById('receiptFlatName').textContent = appState.flatName;
-    document.getElementById('receiptPaymentMode').textContent = roommate.method || 'Online Transfer';
-    document.getElementById('receiptUtr').textContent = roommate.utr || 'VERIFIED-01';
-    document.getElementById('receiptDateTime').textContent = roommate.paidAt || roommate.paidOn || 'Recently Paid';
+    $('receiptNumber').textContent = receiptNum;
+    $('receiptAmount').textContent = inr(perHead);
+    $('receiptMonthYear').textContent = appState.activeMonth;
+    $('receiptRoommateName').textContent = roommate.name;
+    $('receiptFlatName').textContent = appState.flatName;
+    $('receiptPaymentMode').textContent = roommate.method || 'Online Transfer';
+    $('receiptUtr').textContent = roommate.utr || 'VERIFIED-01';
+    $('receiptDateTime').textContent = roommate.paidAt || roommate.paidOn || 'Recently Paid';
 
-    // Detailed expense breakdown in receipt
-    if (document.getElementById('receiptRentBreakdown')) {
-      document.getElementById('receiptRentBreakdown').textContent = `₹${rent.toLocaleString('en-IN')}`;
-    }
-    if (document.getElementById('receiptBldgBreakdown')) {
-      document.getElementById('receiptBldgBreakdown').textContent = `₹${bldgMaint.toLocaleString('en-IN')}`;
-    }
-    if (document.getElementById('receiptCleanBreakdown')) {
-      document.getElementById('receiptCleanBreakdown').textContent = `₹${cleanMaint.toLocaleString('en-IN')}`;
-    }
-    if (document.getElementById('receiptLightBreakdown')) {
-      document.getElementById('receiptLightBreakdown').textContent = `₹${light.toLocaleString('en-IN')}`;
-    }
+    if ($('receiptRentBreakdown')) $('receiptRentBreakdown').textContent = inr(rent);
+    if ($('receiptBldgBreakdown')) $('receiptBldgBreakdown').textContent = inr(bldgMaint);
+    if ($('receiptCleanBreakdown')) $('receiptCleanBreakdown').textContent = inr(cleanMaint);
+    if ($('receiptLightBreakdown')) $('receiptLightBreakdown').textContent = inr(light);
 
-    document.getElementById('receiptModal').classList.remove('hidden');
+    $('receiptModal').classList.remove('hidden');
     if (window.lucide) window.lucide.createIcons();
   };
+
+  // ---------- HELPERS ----------
 
   function showToast(msg) {
     const toast = document.createElement('div');
@@ -1181,7 +1069,7 @@
 
   function escapeHtml(str) {
     if (!str) return '';
-    return str.replace(/[&<>'"]/g, tag => ({
+    return String(str).replace(/[&<>'"]/g, tag => ({
       '&': '&amp;',
       '<': '&lt;',
       '>': '&gt;',
