@@ -11,6 +11,7 @@
   const ROOMMATES_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/roommates';
   const EXPENSES_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/expenses';
   const PAYMENTS_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/payments';
+  const CLEANING_URL = 'https://room-no-12-backend.kalpeshbagul2619.workers.dev/api/cleaning';
 
   const defaultData = {
     flatName: 'ROOM NO 12',
@@ -234,6 +235,9 @@
           if (loginScreen) loginScreen.classList.add('hidden');
           updateUserHeaderBadge();
           loadUpiDirectory();
+          loadExpenses();
+          loadCleaningRoster();
+          renderPersonalDashboard();
           return;
         }
       }
@@ -278,6 +282,9 @@
           updateUserHeaderBadge();
           renderAll();
           loadUpiDirectory();
+          loadExpenses();
+          loadCleaningRoster();
+          renderPersonalDashboard();
           showToast(`Welcome back, ${data.user.name}!`);
           return true;
         }
@@ -309,6 +316,9 @@
       updateUserHeaderBadge();
       renderAll();
       loadUpiDirectory();
+      loadExpenses();
+      loadCleaningRoster();
+      renderPersonalDashboard();
       showToast(`Welcome back, ${matched.display}!`);
       return true;
     } else {
@@ -334,6 +344,9 @@
 
     const adminPanel = document.getElementById('adminPanel');
     if (adminPanel) adminPanel.classList.add('hidden');
+
+    const dashSection = document.getElementById('personalDashboardSection');
+    if (dashSection) dashSection.classList.add('hidden');
 
     updateUserHeaderBadge();
     renderAll();
@@ -506,6 +519,7 @@
     $('adminRoommateCount').textContent = appState.roommates.length;
 
     renderRoommateCards(perHead);
+    renderPersonalDashboard();
 
     if (window.lucide) window.lucide.createIcons();
   }
@@ -1010,6 +1024,163 @@
       paySplitCustomAmount.addEventListener('input', updatePaySplitQr);
     }
 
+    // Phase 3: Cleaning roster button (open modal)
+    const cleaningBtn = document.getElementById('cleaningBtn');
+    if (cleaningBtn) {
+      cleaningBtn.addEventListener('click', () => {
+        loadCleaningRoster();
+        document.getElementById('cleaningModal').classList.remove('hidden');
+      });
+    }
+
+    // Phase 3: Auto-generate Sunday rotation
+    const btnGenCleaning = document.getElementById('btnGenerateCleaningRoster');
+    if (btnGenCleaning) {
+      btnGenCleaning.addEventListener('click', generateCleaningRoster);
+    }
+
+    // Phase 3: Duty photo file input
+    const inputDutyPhoto = document.getElementById('inputDutyPhoto');
+    if (inputDutyPhoto) {
+      inputDutyPhoto.addEventListener('change', handleDutyPhotoUpload);
+    }
+
+    // Phase 3: Submit duty button
+    const btnSubmitDuty = document.getElementById('btnSubmitCleaningDuty');
+    if (btnSubmitDuty) {
+      btnSubmitDuty.addEventListener('click', submitCleaningDuty);
+    }
+
+    // Phase 3: Roommate review buttons
+    const btnApproveDuty = document.getElementById('btnApproveDuty');
+    if (btnApproveDuty) {
+      btnApproveDuty.addEventListener('click', () => reviewDuty('approve'));
+    }
+
+    const btnRejectDuty = document.getElementById('btnRejectDuty');
+    if (btnRejectDuty) {
+      btnRejectDuty.addEventListener('click', () => {
+        const note = prompt('Please enter note for redo (e.g. bathroom needs more cleaning):');
+        if (note !== null) reviewDuty('redo', note);
+      });
+    }
+
+    // Phase 3: Swap duty
+    const btnOpenSwapDuty = document.getElementById('btnOpenSwapDuty');
+    if (btnOpenSwapDuty) {
+      btnOpenSwapDuty.addEventListener('click', openSwapDutyModal);
+    }
+
+    const btnConfirmSwapDuty = document.getElementById('btnConfirmSwapDuty');
+    if (btnConfirmSwapDuty) {
+      btnConfirmSwapDuty.addEventListener('click', confirmSwapDuty);
+    }
+
+    // Phase 4: Personal Dashboard buttons
+    const dashSettleUpBtn = document.getElementById('dashSettleUpBtn');
+    if (dashSettleUpBtn) {
+      dashSettleUpBtn.addEventListener('click', openSettleUpModal);
+    }
+
+    const dashRemindersBtn = document.getElementById('dashRemindersBtn');
+    if (dashRemindersBtn) {
+      dashRemindersBtn.addEventListener('click', () => openWhatsAppReminderModal('rent'));
+    }
+
+    const dashRentActionBtn = document.getElementById('dashRentActionBtn');
+    if (dashRentActionBtn) {
+      dashRentActionBtn.addEventListener('click', () => {
+        if (!currentLoggedInUser) return;
+        const myRentRecord = appState.roommates.find(r => 
+          r.id === currentLoggedInUser.roommateId || 
+          r.name.toLowerCase().includes(currentLoggedInUser.display.toLowerCase())
+        );
+        if (myRentRecord) {
+          if (myRentRecord.status === 'paid') window.openReceiptModal(myRentRecord.id);
+          else window.openCheckoutModal(myRentRecord.id);
+        } else {
+          showToast('Roommate record not found.');
+        }
+      });
+    }
+
+    const dashRentWaBtn = document.getElementById('dashRentWaBtn');
+    if (dashRentWaBtn) {
+      dashRentWaBtn.addEventListener('click', () => openWhatsAppReminderModal('rent'));
+    }
+
+    const dashExpenseActionBtn = document.getElementById('dashExpenseActionBtn');
+    if (dashExpenseActionBtn) {
+      dashExpenseActionBtn.addEventListener('click', () => {
+        loadExpenses();
+        document.getElementById('expensesModal').classList.remove('hidden');
+      });
+    }
+
+    const dashExpenseWaBtn = document.getElementById('dashExpenseWaBtn');
+    if (dashExpenseWaBtn) {
+      dashExpenseWaBtn.addEventListener('click', () => openWhatsAppReminderModal('expense'));
+    }
+
+    const dashCleaningActionBtn = document.getElementById('dashCleaningActionBtn');
+    if (dashCleaningActionBtn) {
+      dashCleaningActionBtn.addEventListener('click', () => {
+        if (!currentLoggedInUser) return;
+        const duties = Array.isArray(cleaningDutiesState) ? cleaningDutiesState : [];
+        const myDuties = duties.filter(d => d.person_id === currentLoggedInUser.roommateId);
+        const activeDuty = myDuties.find(d => ['upcoming', 'in_progress', 'submitted', 'redo'].includes(d.status)) || myDuties[0];
+        if (activeDuty) {
+          window.openCleaningDutyModal(activeDuty.id);
+        } else {
+          loadCleaningRoster();
+          document.getElementById('cleaningModal').classList.remove('hidden');
+        }
+      });
+    }
+
+    const dashCleaningWaBtn = document.getElementById('dashCleaningWaBtn');
+    if (dashCleaningWaBtn) {
+      dashCleaningWaBtn.addEventListener('click', () => openWhatsAppReminderModal('cleaning'));
+    }
+
+    const btnShareSettleUpWa = document.getElementById('btnShareSettleUpWa');
+    if (btnShareSettleUpWa) {
+      btnShareSettleUpWa.addEventListener('click', shareSettleUpPlanToWhatsApp);
+    }
+
+    // Phase 4: WhatsApp reminder modal listeners
+    const waTypeRentBtn = document.getElementById('waTypeRentBtn');
+    const waTypeExpenseBtn = document.getElementById('waTypeExpenseBtn');
+    const waTypeCleaningBtn = document.getElementById('waTypeCleaningBtn');
+    if (waTypeRentBtn && waTypeExpenseBtn && waTypeCleaningBtn) {
+      waTypeRentBtn.addEventListener('click', () => selectWhatsAppReminderType('rent'));
+      waTypeExpenseBtn.addEventListener('click', () => selectWhatsAppReminderType('expense'));
+      waTypeCleaningBtn.addEventListener('click', () => selectWhatsAppReminderType('cleaning'));
+    }
+
+    const waRecipientSelect = document.getElementById('waRecipientSelect');
+    if (waRecipientSelect) {
+      waRecipientSelect.addEventListener('change', updateWhatsAppMessagePreview);
+    }
+
+    const btnCopyWaText = document.getElementById('btnCopyWaText');
+    if (btnCopyWaText) {
+      btnCopyWaText.addEventListener('click', () => {
+        const text = document.getElementById('waMessageText').value;
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(() => {
+          showToast('✅ Reminder message copied to clipboard!');
+        }).catch(() => {
+          prompt('Copy reminder text:', text);
+        });
+      });
+    }
+
+    const btnOpenWhatsApp = document.getElementById('btnOpenWhatsApp');
+    if (btnOpenWhatsApp) {
+      btnOpenWhatsApp.addEventListener('click', handleSendWhatsAppFromModal);
+    }
+
     // Auto-sync polling every 12 seconds so all devices see live updates
     setInterval(() => {
       loadRemoteState(true);
@@ -1235,6 +1406,8 @@
       "'": '&#39;',
       '"': '&quot;'
     }[tag] || tag));
+  }
+
   // ---------- PHASE 1: UPI DIRECTORY ----------
 
   let upiDirectoryRoommates = [];
@@ -1448,6 +1621,7 @@
     calculateAndRenderBalances();
     renderPendingConfirmations();
     renderExpensesList();
+    renderPersonalDashboard();
   }
 
   function calculateAndRenderBalances() {
@@ -1896,5 +2070,1030 @@
       showToast('Network error.');
     }
   };
+
+  // ---------- PHASE 3: SUNDAY CLEANING ROSTER ----------
+
+  let cleaningDutiesState = [];
+  let activeDutyContext = null;
+
+  async function loadCleaningRoster() {
+    const list = document.getElementById('cleaningDutiesList');
+    if (!list) return;
+
+    const token = localStorage.getItem('roommate_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(CLEANING_URL, { headers });
+      if (res.ok) {
+        cleaningDutiesState = await res.json();
+      }
+    } catch (e) {
+      console.warn('Error fetching cleaning roster:', e);
+    }
+
+    renderCleaningDutiesList();
+    renderPersonalDashboard();
+  }
+
+  function renderCleaningDutiesList() {
+    const list = document.getElementById('cleaningDutiesList');
+    if (!list) return;
+
+    if (!cleaningDutiesState || cleaningDutiesState.length === 0) {
+      list.innerHTML = `
+        <div class="p-8 text-center bg-teal-50/50 border border-teal-200 rounded-xl space-y-2">
+          <i data-lucide="calendar" class="w-8 h-8 text-teal-400 mx-auto"></i>
+          <p class="text-sm font-bold text-teal-900">No Cleaning Rotation Generated Yet</p>
+          <p class="text-xs text-slate-500">Click the "Auto-Rotate Sundays" button above to automatically assign Sundays among the 5 roommates!</p>
+        </div>
+      `;
+      if (window.lucide) window.lucide.createIcons();
+      return;
+    }
+
+    const myId = currentLoggedInUser ? currentLoggedInUser.roommateId : null;
+
+    list.innerHTML = cleaningDutiesState.map(d => {
+      const isMine = myId && d.person_id === myId;
+      const doneCount = (d.checks || []).filter(c => c.done === 1).length;
+      const photoCount = (d.photos || []).length;
+
+      let badgeClass = 'bg-slate-100 text-slate-700';
+      let badgeLabel = 'Upcoming';
+
+      if (d.status === 'in_progress') {
+        badgeClass = 'bg-blue-100 text-blue-800';
+        badgeLabel = `In Progress (${doneCount}/7)`;
+      } else if (d.status === 'submitted') {
+        badgeClass = 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse';
+        badgeLabel = 'Awaiting Approval';
+      } else if (d.status === 'approved') {
+        badgeClass = 'bg-emerald-100 text-emerald-800 border border-emerald-300';
+        badgeLabel = 'Approved';
+      } else if (d.status === 'redo') {
+        badgeClass = 'bg-rose-100 text-rose-800 border border-rose-300';
+        badgeLabel = 'Redo Requested';
+      } else if (d.status === 'missed') {
+        badgeClass = 'bg-red-100 text-red-800';
+        badgeLabel = 'Missed';
+      }
+
+      // Format date
+      const dateParts = d.duty_date.split('-');
+      const dObj = new Date(Date.UTC(dateParts[0], Number(dateParts[1]) - 1, dateParts[2]));
+      const dateStr = dObj.toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' });
+
+      return `
+        <div onclick="window.openCleaningDutyModal(${d.id})"
+             class="p-3.5 bg-white border ${isMine ? 'border-teal-500 ring-2 ring-teal-500/20 shadow-sm' : 'border-slate-200'} rounded-xl hover:shadow-md transition cursor-pointer flex items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl ${isMine ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-700'} font-bold flex flex-col items-center justify-center text-xs shadow-sm">
+              <span class="text-[9px] uppercase tracking-wider">${dObj.toLocaleDateString('en-IN', { timeZone: 'UTC', month: 'short' })}</span>
+              <span class="text-sm font-black leading-none">${dateParts[2]}</span>
+            </div>
+            <div>
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="font-bold text-slate-900 text-sm">${escapeHtml(d.assignee_name)}</span>
+                ${isMine ? '<span class="text-[9px] font-extrabold bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded-full border border-teal-200">Your Duty</span>' : ''}
+              </div>
+              <p class="text-xs text-slate-500">${dateStr} &bull; ${doneCount}/7 tasks done ${photoCount > 0 ? `&bull; 📷 ${photoCount} photo` : ''}</p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="text-xs font-bold px-2.5 py-1 rounded-full ${badgeClass}">
+              ${badgeLabel}
+            </span>
+            <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  window.openCleaningDutyModal = function (dutyId) {
+    const duty = cleaningDutiesState.find(d => d.id === dutyId);
+    if (!duty) return;
+
+    activeDutyContext = duty;
+    const modal = document.getElementById('cleaningDutyModal');
+    if (!modal) return;
+
+    const myId = currentLoggedInUser ? currentLoggedInUser.roommateId : null;
+    const isAssignee = myId && duty.person_id === myId;
+    const isOtherRoommate = myId && duty.person_id !== myId;
+    const isApproved = duty.status === 'approved';
+
+    // Header info
+    const dateParts = duty.duty_date.split('-');
+    const dObj = new Date(Date.UTC(dateParts[0], Number(dateParts[1]) - 1, dateParts[2]));
+    document.getElementById('dutyDateHeader').textContent = dObj.toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    document.getElementById('dutyAssigneeName').textContent = duty.assignee_name;
+
+    // Status badge
+    const badgeEl = document.getElementById('dutyStatusBadge');
+    badgeEl.textContent = duty.status.replace('_', ' ').toUpperCase();
+    badgeEl.className = `text-xs font-bold px-2.5 py-1 rounded-full ${
+      duty.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+      duty.status === 'submitted' ? 'bg-amber-100 text-amber-800 animate-pulse' :
+      duty.status === 'redo' ? 'bg-rose-100 text-rose-800' :
+      duty.status === 'missed' ? 'bg-red-100 text-red-800' :
+      'bg-slate-100 text-slate-700'
+    }`;
+
+    // Reviewer note alert
+    const noteBox = document.getElementById('dutyReviewerNoteBox');
+    const noteText = document.getElementById('dutyReviewerNoteText');
+    if (duty.status === 'redo' && duty.reviewer_note) {
+      noteText.textContent = duty.reviewer_note;
+      noteBox.classList.remove('hidden');
+    } else {
+      noteBox.classList.add('hidden');
+    }
+
+    // Checklist items
+    const checks = duty.checks || [];
+    const doneCount = checks.filter(c => c.done === 1).length;
+    document.getElementById('dutyChecklistCounter').textContent = `${doneCount} / ${checks.length}`;
+
+    const chkCont = document.getElementById('dutyChecklistContainer');
+    chkCont.innerHTML = checks.map(c => {
+      const isDone = c.done === 1;
+      const canToggle = isAssignee && !isApproved;
+
+      return `
+        <label class="flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-white transition ${canToggle ? 'cursor-pointer' : 'cursor-default'}">
+          <input type="checkbox" ${isDone ? 'checked' : ''} ${canToggle ? '' : 'disabled'}
+                 onchange="window.toggleDutyCheck(${duty.id}, ${c.id}, this.checked)"
+                 class="w-4 h-4 rounded text-teal-600 focus:ring-teal-500">
+          <span class="text-xs ${isDone ? 'line-through text-slate-400' : 'text-slate-800 font-medium'}">${escapeHtml(c.item)}</span>
+        </label>
+      `;
+    }).join('');
+
+    // Photo thumbnails
+    const photoCont = document.getElementById('dutyPhotosContainer');
+    const photos = duty.photos || [];
+    if (photos.length === 0) {
+      photoCont.innerHTML = '<span class="text-xs text-slate-400 italic py-1">No proof photo uploaded yet</span>';
+    } else {
+      photoCont.innerHTML = photos.map(p => `
+        <div class="relative w-20 h-20 rounded-xl overflow-hidden border border-slate-200 shrink-0 shadow-sm group">
+          <img src="${p.photo_data}" alt="Proof" class="w-full h-full object-cover">
+          <span class="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-white text-center py-0.5 font-medium">Uploaded</span>
+        </div>
+      `).join('');
+    }
+
+    // Photo upload section visibility
+    const uploadSec = document.getElementById('dutyUploadSection');
+    if (uploadSec) {
+      if (isAssignee && !isApproved) {
+        uploadSec.classList.remove('hidden');
+      } else {
+        uploadSec.classList.add('hidden');
+      }
+    }
+
+    // Submit button visibility
+    const submitBtn = document.getElementById('btnSubmitCleaningDuty');
+    if (submitBtn) {
+      if (isAssignee && !isApproved && duty.status !== 'submitted') {
+        submitBtn.classList.remove('hidden');
+      } else {
+        submitBtn.classList.add('hidden');
+      }
+    }
+
+    // Review section visibility (for any other roommate when submitted)
+    const reviewSec = document.getElementById('dutyReviewActionSection');
+    if (reviewSec) {
+      if (duty.status === 'submitted' && (isOtherRoommate || (currentLoggedInUser && currentLoggedInUser.isAdmin))) {
+        reviewSec.classList.remove('hidden');
+      } else {
+        reviewSec.classList.add('hidden');
+      }
+    }
+
+    modal.classList.remove('hidden');
+    if (window.lucide) window.lucide.createIcons();
+  };
+
+  window.toggleDutyCheck = async function (dutyId, checkId, done) {
+    const token = localStorage.getItem('roommate_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${CLEANING_URL}/${dutyId}/check`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ checkId, done })
+      });
+      if (res.ok) {
+        // Update local state
+        const duty = cleaningDutiesState.find(d => d.id === dutyId);
+        if (duty) {
+          const item = (duty.checks || []).find(c => c.id === checkId);
+          if (item) item.done = done ? 1 : 0;
+          if (duty.status === 'upcoming') duty.status = 'in_progress';
+          openCleaningDutyModal(dutyId);
+          renderCleaningDutiesList();
+        }
+      }
+    } catch (e) {
+      console.warn('Error updating check:', e);
+    }
+  };
+
+  function compressImage(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxDim = 1024;
+          let w = img.width;
+          let h = img.height;
+
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.round((h * maxDim) / w);
+              w = maxDim;
+            } else {
+              w = Math.round((w * maxDim) / h);
+              h = maxDim;
+            }
+          }
+
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          resolve(dataUrl);
+        };
+        img.onerror = reject;
+        img.src = ev.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleDutyPhotoUpload(e) {
+    if (!activeDutyContext) return;
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select a valid image file.');
+      return;
+    }
+
+    showToast('Compressing photo...');
+
+    try {
+      const compressedData = await compressImage(file);
+      const token = localStorage.getItem('roommate_token');
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`${CLEANING_URL}/${activeDutyContext.id}/photo`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ photoData: compressedData })
+      });
+
+      if (res.ok) {
+        showToast('📷 Clean room photo uploaded successfully!');
+        await loadCleaningRoster();
+        openCleaningDutyModal(activeDutyContext.id);
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to upload photo.');
+      }
+    } catch (err) {
+      showToast('Error compressing or uploading image.');
+    }
+  }
+
+  async function submitCleaningDuty() {
+    if (!activeDutyContext) return;
+    const checks = activeDutyContext.checks || [];
+    const doneCount = checks.filter(c => c.done === 1).length;
+    const photos = activeDutyContext.photos || [];
+
+    if (doneCount < checks.length) {
+      showToast('⚠️ Please complete and check all 7 cleaning items before submitting.');
+      return;
+    }
+
+    if (photos.length === 0) {
+      showToast('⚠️ Please upload at least one clean room photo before submitting.');
+      return;
+    }
+
+    const token = localStorage.getItem('roommate_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${CLEANING_URL}/${activeDutyContext.id}/submit`, {
+        method: 'POST',
+        headers
+      });
+
+      if (res.ok) {
+        showToast('✅ Cleaning duty submitted for roommate approval!');
+        document.getElementById('cleaningDutyModal').classList.add('hidden');
+        await loadCleaningRoster();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Submission failed.');
+      }
+    } catch (e) {
+      showToast('Network error.');
+    }
+  }
+
+  async function reviewDuty(action, note = '') {
+    if (!activeDutyContext) return;
+    const token = localStorage.getItem('roommate_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${CLEANING_URL}/${activeDutyContext.id}/review`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action, note })
+      });
+
+      if (res.ok) {
+        showToast(action === 'approve' ? '🎉 Clean room approved!' : 'Redo requested with note.');
+        document.getElementById('cleaningDutyModal').classList.add('hidden');
+        await loadCleaningRoster();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Action failed.');
+      }
+    } catch (e) {
+      showToast('Network error.');
+    }
+  }
+
+  async function generateCleaningRoster() {
+    if (!confirm('Generate Sunday cleaning rotation for this month?')) return;
+    const token = localStorage.getItem('roommate_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const now = new Date();
+    try {
+      const res = await fetch(`${CLEANING_URL}/generate`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ year: now.getFullYear(), month: now.getMonth() + 1 })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`✅ ${data.message || 'Roster generated!'}`);
+        await loadCleaningRoster();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to generate roster.');
+      }
+    } catch (e) {
+      showToast('Network error.');
+    }
+  }
+
+  function openSwapDutyModal() {
+    if (!activeDutyContext) return;
+    const select = document.getElementById('selectSwapTargetPerson');
+    if (!select) return;
+
+    select.innerHTML = appState.roommates
+      .filter(r => r.id !== activeDutyContext.person_id)
+      .map(r => `
+        <option value="${r.id}">${escapeHtml(r.name.replace(/\s*\(You\)/i, ''))}</option>
+      `).join('');
+
+    document.getElementById('swapCleaningModal').classList.remove('hidden');
+  }
+
+  async function confirmSwapDuty() {
+    if (!activeDutyContext) return;
+    const targetPersonId = document.getElementById('selectSwapTargetPerson').value;
+    if (!targetPersonId) return;
+
+    const token = localStorage.getItem('roommate_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${CLEANING_URL}/${activeDutyContext.id}/swap`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ targetPersonId })
+      });
+
+      if (res.ok) {
+        showToast('✅ Cleaning duty turn swapped successfully!');
+        document.getElementById('swapCleaningModal').classList.add('hidden');
+        document.getElementById('cleaningDutyModal').classList.add('hidden');
+        await loadCleaningRoster();
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Swap failed.');
+      }
+    } catch (e) {
+      showToast('Network error.');
+    }
+  }
+
+  // ==========================================
+  // ---------- PHASE 4: PERSONAL DASHBOARD, SETTLE UP & REMINDERS ----------
+  // ==========================================
+
+  let activeWaReminderType = 'rent';
+
+  function renderPersonalDashboard() {
+    const dashSection = document.getElementById('personalDashboardSection');
+    if (!dashSection) return;
+
+    if (!currentLoggedInUser) {
+      dashSection.classList.add('hidden');
+      return;
+    }
+
+    dashSection.classList.remove('hidden');
+
+    // 1. Header greeting
+    const greeting = document.getElementById('dashGreeting');
+    if (greeting) greeting.textContent = `👋 Welcome back, ${currentLoggedInUser.display}!`;
+
+    const sub = document.getElementById('dashSubheading');
+    if (sub) sub.textContent = `Live summary for Room 12 • ${appState.activeMonth || 'October 2026'}`;
+
+    // 2. Card 1: Room Rent & Bills
+    const myRentRecord = appState.roommates.find(r => 
+      r.id === currentLoggedInUser.roommateId || 
+      r.name.toLowerCase().includes(currentLoggedInUser.display.toLowerCase())
+    );
+    const { perHead } = getTotals();
+    const dashRentAmount = document.getElementById('dashRentAmount');
+    if (dashRentAmount) dashRentAmount.textContent = `₹${perHead.toLocaleString('en-IN')}`;
+
+    const dashRentDueNote = document.getElementById('dashRentDueNote');
+    if (dashRentDueNote) dashRentDueNote.textContent = appState.dueNote || 'Due by 5th of every month';
+
+    const dashRentBadge = document.getElementById('dashRentBadge');
+    const dashRentActionText = document.getElementById('dashRentActionText');
+    const isRentPaid = myRentRecord && myRentRecord.status === 'paid';
+
+    if (dashRentBadge) {
+      if (isRentPaid) {
+        dashRentBadge.className = 'text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200';
+        dashRentBadge.textContent = 'Paid ✅';
+      } else {
+        dashRentBadge.className = 'text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200';
+        dashRentBadge.textContent = 'Pending ⏳';
+      }
+    }
+    if (dashRentActionText) {
+      dashRentActionText.textContent = isRentPaid ? 'View Receipt' : 'Pay Rent';
+    }
+
+    // 3. Card 2: Shared Expenses
+    const expenses = expensesState.expenses || [];
+    const splits = expensesState.splits || [];
+    const payments = expensesState.payments || [];
+
+    let myReceivablePaise = 0;
+    let myPayablePaise = 0;
+    const pendingConfirmsToMe = [];
+
+    function getConfirmedPaid(expId, fromId, toId) {
+      return payments
+        .filter(p => p.expense_id === expId && p.from_id === fromId && p.to_id === toId && p.status === 'confirmed')
+        .reduce((sum, p) => sum + p.amount_paise, 0);
+    }
+
+    expenses.forEach(exp => {
+      const expSplits = splits.filter(s => s.expense_id === exp.id);
+      const buyerId = exp.paid_by;
+
+      if (buyerId === currentLoggedInUser.roommateId) {
+        expSplits.forEach(sp => {
+          if (sp.person_id === buyerId) return;
+          const confirmed = getConfirmedPaid(exp.id, sp.person_id, buyerId);
+          const rem = Math.max(0, sp.share_paise - confirmed);
+          if (rem > 0) myReceivablePaise += rem;
+        });
+      } else {
+        const mySp = expSplits.find(s => s.person_id === currentLoggedInUser.roommateId);
+        if (mySp) {
+          const confirmed = getConfirmedPaid(exp.id, currentLoggedInUser.roommateId, buyerId);
+          const rem = Math.max(0, mySp.share_paise - confirmed);
+          if (rem > 0) myPayablePaise += rem;
+        }
+      }
+    });
+
+    payments.forEach(p => {
+      if (p.to_id === currentLoggedInUser.roommateId && p.status === 'pending') {
+        pendingConfirmsToMe.push(p);
+      }
+    });
+
+    const netPaise = myReceivablePaise - myPayablePaise;
+    const netRupees = Math.round(netPaise / 100);
+    const dashExpenseNet = document.getElementById('dashExpenseNet');
+    const dashExpenseBadge = document.getElementById('dashExpenseBadge');
+    const dashExpenseDetail = document.getElementById('dashExpenseDetail');
+
+    if (dashExpenseNet && dashExpenseBadge && dashExpenseDetail) {
+      if (netRupees > 0) {
+        dashExpenseBadge.className = 'text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200';
+        dashExpenseBadge.textContent = `+₹${netRupees} Receivable`;
+        dashExpenseNet.className = 'text-2xl font-black text-emerald-700';
+        dashExpenseNet.textContent = `+₹${netRupees.toLocaleString('en-IN')}`;
+        dashExpenseDetail.textContent = `Roommates owe you ₹${Math.round(myReceivablePaise / 100).toLocaleString('en-IN')}`;
+      } else if (netRupees < 0) {
+        dashExpenseBadge.className = 'text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200';
+        dashExpenseBadge.textContent = `-₹${Math.abs(netRupees)} Payable`;
+        dashExpenseNet.className = 'text-2xl font-black text-rose-700';
+        dashExpenseNet.textContent = `-₹${Math.abs(netRupees).toLocaleString('en-IN')}`;
+        dashExpenseDetail.textContent = `You owe buyers ₹${Math.round(myPayablePaise / 100).toLocaleString('en-IN')}`;
+      } else {
+        dashExpenseBadge.className = 'text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200';
+        dashExpenseBadge.textContent = 'All Settled ✅';
+        dashExpenseNet.className = 'text-2xl font-black text-slate-900';
+        dashExpenseNet.textContent = '₹0';
+        dashExpenseDetail.textContent = 'No pending debts';
+      }
+    }
+
+    // 4. Card 3: Sunday Cleaning
+    const duties = Array.isArray(cleaningDutiesState) ? cleaningDutiesState : [];
+    const myDuties = duties.filter(d => d.person_id === currentLoggedInUser.roommateId);
+    const activeDuty = myDuties.find(d => ['upcoming', 'in_progress', 'submitted', 'redo'].includes(d.status)) || myDuties[0];
+
+    const dashCleaningBadge = document.getElementById('dashCleaningBadge');
+    const dashCleaningDate = document.getElementById('dashCleaningDate');
+    const dashCleaningProgress = document.getElementById('dashCleaningProgress');
+    const dashCleaningRatio = document.getElementById('dashCleaningRatio');
+
+    if (activeDuty) {
+      const dObj = new Date(activeDuty.duty_date + 'T00:00:00Z');
+      const dateFormatted = dObj.toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' });
+      if (dashCleaningDate) dashCleaningDate.textContent = `${dateFormatted} (Sun)`;
+
+      const checks = activeDuty.checks || [];
+      const totalChecks = checks.length || 7;
+      const doneChecks = checks.filter(c => c.done).length;
+      const pct = Math.round((doneChecks / totalChecks) * 100);
+
+      if (dashCleaningProgress) dashCleaningProgress.style.width = `${pct}%`;
+      if (dashCleaningRatio) dashCleaningRatio.textContent = `${doneChecks}/${totalChecks}`;
+
+      if (dashCleaningBadge) {
+        const badgeClasses = {
+          upcoming: 'bg-slate-100 text-slate-700 border-slate-300',
+          in_progress: 'bg-amber-100 text-amber-800 border-amber-300',
+          submitted: 'bg-purple-100 text-purple-800 border-purple-300',
+          approved: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+          redo: 'bg-rose-100 text-rose-800 border-rose-300',
+          missed: 'bg-red-100 text-red-800 border-red-300'
+        };
+        dashCleaningBadge.className = `text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${badgeClasses[activeDuty.status] || 'bg-slate-100 text-slate-700'}`;
+        dashCleaningBadge.textContent = activeDuty.status.toUpperCase();
+      }
+    } else {
+      if (dashCleaningDate) dashCleaningDate.textContent = 'Not assigned yet';
+      if (dashCleaningProgress) dashCleaningProgress.style.width = '0%';
+      if (dashCleaningRatio) dashCleaningRatio.textContent = '0/7';
+      if (dashCleaningBadge) {
+        dashCleaningBadge.className = 'text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200';
+        dashCleaningBadge.textContent = 'Upcoming';
+      }
+    }
+
+    // 5. Action Alert Banner
+    const actionBanner = document.getElementById('dashActionBanner');
+    if (actionBanner) {
+      if (pendingConfirmsToMe.length > 0) {
+        actionBanner.className = 'p-4 rounded-2xl border border-amber-300 bg-amber-50 text-amber-900 transition-all animate-fade-in shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3';
+        actionBanner.innerHTML = `
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-amber-200 text-amber-800 flex items-center justify-center font-bold shrink-0">
+              <i data-lucide="bell" class="w-5 h-5 text-amber-700"></i>
+            </div>
+            <div>
+              <p class="text-xs font-bold">Payment Confirmation Needed</p>
+              <p class="text-[11px] text-amber-800">You have ${pendingConfirmsToMe.length} payment(s) sent to you waiting for your confirmation.</p>
+            </div>
+          </div>
+          <button onclick="loadExpenses(); document.getElementById('expensesModal').classList.remove('hidden');"
+                  class="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-sm self-start sm:self-auto">
+            Review & Confirm
+          </button>
+        `;
+        actionBanner.classList.remove('hidden');
+      } else if (activeDuty && activeDuty.status === 'in_progress') {
+        actionBanner.className = 'p-4 rounded-2xl border border-teal-300 bg-teal-50 text-teal-900 transition-all animate-fade-in shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3';
+        actionBanner.innerHTML = `
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-teal-200 text-teal-800 flex items-center justify-center font-bold shrink-0">
+              <i data-lucide="sparkles" class="w-5 h-5 text-teal-700"></i>
+            </div>
+            <div>
+              <p class="text-xs font-bold">Cleaning In Progress</p>
+              <p class="text-[11px] text-teal-800">Complete all 7 checklist tasks and upload a clean-room photo to finish.</p>
+            </div>
+          </div>
+          <button onclick="window.openCleaningDutyModal(${activeDuty.id})"
+                  class="px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-sm self-start sm:self-auto">
+            Open Checklist
+          </button>
+        `;
+        actionBanner.classList.remove('hidden');
+      } else if (!isRentPaid) {
+        actionBanner.className = 'p-4 rounded-2xl border border-slate-200 bg-white text-slate-800 transition-all animate-fade-in shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3';
+        actionBanner.innerHTML = `
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold shrink-0">
+              <i data-lucide="info" class="w-5 h-5 text-emerald-600"></i>
+            </div>
+            <div>
+              <p class="text-xs font-bold">Monthly Rent Share Pending</p>
+              <p class="text-[11px] text-slate-500">Your share of ₹${perHead.toLocaleString('en-IN')} for ${appState.activeMonth} is pending.</p>
+            </div>
+          </div>
+          <button onclick="window.openCheckoutModal('${myRentRecord ? myRentRecord.id : '1'}')"
+                  class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-sm self-start sm:self-auto">
+            Pay Rent Now
+          </button>
+        `;
+        actionBanner.classList.remove('hidden');
+      } else {
+        actionBanner.classList.add('hidden');
+      }
+    }
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  // ---------- SMART SETTLE UP ALGORITHM ----------
+
+  function calculateSettleUpSuggestions() {
+    const expenses = expensesState.expenses || [];
+    const splits = expensesState.splits || [];
+    const payments = expensesState.payments || [];
+
+    const netPaise = {};
+    appState.roommates.forEach(r => { netPaise[r.id] = 0; });
+
+    // 1. Sum expenses paid by each buyer
+    expenses.forEach(exp => {
+      const payerId = exp.paid_by;
+      if (netPaise[payerId] !== undefined) {
+        netPaise[payerId] += exp.amount_paise;
+      }
+    });
+
+    // 2. Subtract each roommate's allocated split share
+    splits.forEach(sp => {
+      if (netPaise[sp.person_id] !== undefined) {
+        netPaise[sp.person_id] -= sp.share_paise;
+      }
+    });
+
+    // 3. Adjust confirmed partial and full payments
+    payments.forEach(p => {
+      if (p.status === 'confirmed') {
+        if (netPaise[p.from_id] !== undefined) netPaise[p.from_id] += p.amount_paise;
+        if (netPaise[p.to_id] !== undefined) netPaise[p.to_id] -= p.amount_paise;
+      }
+    });
+
+    // Debtors owe money (net < -50), Creditors get money back (net > 50)
+    const debtors = [];
+    const creditors = [];
+
+    appState.roommates.forEach(r => {
+      const net = netPaise[r.id] || 0;
+      const cleanName = r.name.replace(/\s*\(You\)/i, '');
+      const dirEntry = roommatesDirectory.find(d => d.id === r.id);
+      const upi = dirEntry?.upiId || (r.id === '2' ? '8459807346@slc' : '');
+      const phone = dirEntry?.phone || '918459807346';
+
+      if (net < -50) {
+        debtors.push({ id: r.id, name: cleanName, net: -net, upi, phone });
+      } else if (net > 50) {
+        creditors.push({ id: r.id, name: cleanName, net: net, upi, phone });
+      }
+    });
+
+    debtors.sort((a, b) => b.net - a.net);
+    creditors.sort((a, b) => b.net - a.net);
+
+    const suggestions = [];
+    let dIdx = 0;
+    let cIdx = 0;
+
+    while (dIdx < debtors.length && cIdx < creditors.length) {
+      const debtor = debtors[dIdx];
+      const creditor = creditors[cIdx];
+      const settleAmount = Math.min(debtor.net, creditor.net);
+
+      suggestions.push({
+        fromId: debtor.id,
+        fromName: debtor.name,
+        fromPhone: debtor.phone,
+        toId: creditor.id,
+        toName: creditor.name,
+        toUpi: creditor.upi,
+        toPhone: creditor.phone,
+        amountPaise: settleAmount,
+        amountRupees: Math.round(settleAmount / 100)
+      });
+
+      debtor.net -= settleAmount;
+      creditor.net -= settleAmount;
+
+      if (debtor.net <= 50) dIdx++;
+      if (creditor.net <= 50) cIdx++;
+    }
+
+    return suggestions;
+  }
+
+  function openSettleUpModal() {
+    const modal = document.getElementById('settleUpModal');
+    const list = document.getElementById('settleUpList');
+    if (!modal || !list) return;
+
+    const suggestions = calculateSettleUpSuggestions();
+
+    if (suggestions.length === 0) {
+      list.innerHTML = `
+        <div class="p-6 text-center space-y-2 bg-emerald-50/60 rounded-2xl border border-emerald-200">
+          <div class="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto text-xl">
+            🎉
+          </div>
+          <h4 class="font-bold text-slate-800 text-sm">All Settled Up!</h4>
+          <p class="text-xs text-slate-500">Every roommate is completely even. There are no pending shared debts.</p>
+        </div>
+      `;
+    } else {
+      list.innerHTML = suggestions.map((s, idx) => `
+        <div class="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-slate-300 transition">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 font-black text-xs flex items-center justify-center shrink-0 shadow-sm">
+              ₹${s.amountRupees}
+            </div>
+            <div>
+              <div class="text-xs font-bold text-slate-900">
+                <span class="text-rose-600 font-extrabold">${escapeHtml(s.fromName)}</span> pays <span class="text-emerald-700 font-extrabold">${escapeHtml(s.toName)}</span>
+              </div>
+              <div class="text-[11px] text-slate-500 font-mono mt-0.5">
+                ${s.toUpi ? 'UPI: ' + escapeHtml(s.toUpi) : 'UPI ID on file'}
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 self-end sm:self-auto">
+            ${s.toUpi ? `
+              <button onclick="window.openQuickPayForRoommate('${s.toId}', '${escapeHtml(s.toName)}', '${escapeHtml(s.toUpi)}', ${s.amountRupees}, 'Room 12 Settle Up')"
+                      class="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm">
+                <i data-lucide="send" class="w-3 h-3"></i>
+                <span>Pay UPI</span>
+              </button>
+            ` : ''}
+            <button onclick="window.sendSettleReminderWa('${s.fromId}', '${escapeHtml(s.fromName)}', '${escapeHtml(s.toName)}', ${s.amountRupees})"
+                    class="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition flex items-center gap-1">
+              <i data-lucide="message-circle" class="w-3 h-3"></i>
+              <span>Remind</span>
+            </button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    modal.classList.remove('hidden');
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  window.openQuickPayForRoommate = function (toId, toName, toUpi, amountRupees, note) {
+    if (!toUpi) {
+      showToast(`${toName} does not have a UPI ID saved.`);
+      return;
+    }
+    document.getElementById('settleUpModal')?.classList.add('hidden');
+    window.openQuickPayModal(toName, toUpi);
+    const amtInput = document.getElementById('quickPayAmount');
+    if (amtInput) {
+      amtInput.value = amountRupees;
+      updateQuickPayQr();
+    }
+  };
+
+  window.sendSettleReminderWa = function (fromId, fromName, toName, amountRupees) {
+    const text = `💸 *ROOM NO 12 - Expense Settlement Reminder*\nHey ${fromName}! A quick reminder that your pending balance to settle with ${toName} is *₹${amountRupees.toLocaleString('en-IN')}*.\n\nPlease pay via UPI or check the portal:\nhttps://kalpesh55567.github.io/Room-Rent-/roommate-rent-tracker/`;
+    
+    const dirEntry = roommatesDirectory.find(d => d.id === fromId);
+    let phone = dirEntry?.phone || '';
+    if (phone && phone.length === 10) phone = '91' + phone;
+
+    const waUrl = phone
+      ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+
+    window.open(waUrl, '_blank');
+  };
+
+  function shareSettleUpPlanToWhatsApp() {
+    const suggestions = calculateSettleUpSuggestions();
+    let text = `📊 *ROOM NO 12 - Smart Settle Up Plan*\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    if (suggestions.length === 0) {
+      text += `🎉 All shared expenses are currently settled! Everyone is even.\n`;
+    } else {
+      text += `Minimal payments to square away all shared debts:\n\n`;
+      suggestions.forEach((s, idx) => {
+        text += `${idx + 1}. *${s.fromName}* pays *₹${s.amountRupees.toLocaleString('en-IN')}* to *${s.toName}*`;
+        if (s.toUpi) text += ` (UPI: ${s.toUpi})`;
+        text += `\n`;
+      });
+      text += `\n✨ After these transfers, everyone is 100% settled!\n`;
+    }
+    text += `\n🔗 View details: https://kalpesh55567.github.io/Room-Rent-/roommate-rent-tracker/`;
+
+    const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+    window.open(waUrl, '_blank');
+  }
+
+  // ---------- WHATSAPP REMINDER BUILDER ----------
+
+  function openWhatsAppReminderModal(type = 'rent', targetRoommateId = null) {
+    activeWaReminderType = type;
+    const modal = document.getElementById('whatsappReminderModal');
+    if (!modal) return;
+
+    const sel = document.getElementById('waRecipientSelect');
+    if (sel) {
+      sel.innerHTML = `
+        <option value="group">👥 Room No 12 WhatsApp Group</option>
+        ${appState.roommates.map(r => `
+          <option value="${r.id}">${escapeHtml(r.name.replace(/\s*\(You\)/i, ''))}</option>
+        `).join('')}
+      `;
+      if (targetRoommateId) sel.value = targetRoommateId;
+    }
+
+    selectWhatsAppReminderType(type);
+    modal.classList.remove('hidden');
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  function selectWhatsAppReminderType(type) {
+    activeWaReminderType = type;
+    const rentBtn = document.getElementById('waTypeRentBtn');
+    const expBtn = document.getElementById('waTypeExpenseBtn');
+    const cleanBtn = document.getElementById('waTypeCleaningBtn');
+
+    [rentBtn, expBtn, cleanBtn].forEach(b => {
+      if (!b) return;
+      b.className = 'wa-type-btn py-1.5 px-2 rounded-lg text-xs font-bold border border-slate-200 text-slate-600 text-center transition';
+    });
+
+    if (type === 'rent' && rentBtn) {
+      rentBtn.className = 'wa-type-btn py-1.5 px-2 rounded-lg text-xs font-bold border border-emerald-500 bg-emerald-50 text-emerald-800 text-center transition';
+    } else if (type === 'expense' && expBtn) {
+      expBtn.className = 'wa-type-btn py-1.5 px-2 rounded-lg text-xs font-bold border border-indigo-500 bg-indigo-50 text-indigo-800 text-center transition';
+    } else if (type === 'cleaning' && cleanBtn) {
+      cleanBtn.className = 'wa-type-btn py-1.5 px-2 rounded-lg text-xs font-bold border border-teal-500 bg-teal-50 text-teal-800 text-center transition';
+    }
+
+    updateWhatsAppMessagePreview();
+  }
+
+  function updateWhatsAppMessagePreview() {
+    const sel = document.getElementById('waRecipientSelect');
+    const targetId = sel ? sel.value : 'group';
+    const previewBox = document.getElementById('waMessageText');
+    if (!previewBox) return;
+
+    const { perHead } = getTotals();
+    const portalUrl = 'https://kalpesh55567.github.io/Room-Rent-/roommate-rent-tracker/';
+    let msg = '';
+
+    if (activeWaReminderType === 'rent') {
+      if (targetId === 'group') {
+        msg = `🏠 *ROOM NO 12 - Rent & Bills (${appState.activeMonth})*\n` +
+              `Due by: ${appState.dueNote || '5th of this month'}\n` +
+              `━━━━━━━━━━━━━━━━━━━━━\n` +
+              `💰 Per Person Share: *₹${perHead.toLocaleString('en-IN')}*\n\n` +
+              `📋 *Status:*\n` +
+              appState.roommates.map(r => {
+                const icon = r.status === 'paid' ? '✅ Paid' : '⏳ Pending';
+                return `• ${r.name.replace(/\s*\(You\)/i, '')}: ${icon}`;
+              }).join('\n') +
+              `\n\nUPI: ${appState.upiId || '8459807346@slc'}\n` +
+              `Portal: ${portalUrl}`;
+      } else {
+        const r = appState.roommates.find(x => x.id === targetId);
+        const name = r ? r.name.replace(/\s*\(You\)/i, '') : 'Roommate';
+        const isPaid = r && r.status === 'paid';
+        msg = `🏠 *ROOM NO 12 - Rent Reminder*\n` +
+              `Hey ${name}!\n` +
+              `Your rent & light bill share for *${appState.activeMonth}* is *₹${perHead.toLocaleString('en-IN')}*.\n` +
+              `Status: ${isPaid ? '✅ Paid' : '⏳ Pending'}\n` +
+              `Due: ${appState.dueNote || 'Due by 5th of this month'}\n\n` +
+              `UPI ID: ${appState.upiId || '8459807346@slc'}\n` +
+              `Pay here: ${portalUrl}`;
+      }
+    } else if (activeWaReminderType === 'expense') {
+      const suggestions = calculateSettleUpSuggestions();
+      if (targetId === 'group') {
+        msg = `💸 *ROOM NO 12 - Shared Expenses Summary*\n` +
+              `━━━━━━━━━━━━━━━━━━━━━\n`;
+        if (suggestions.length === 0) {
+          msg += `All shared expenses are settled! 🎉\n`;
+        } else {
+          msg += `Pending settlements:\n` +
+            suggestions.map((s, i) => `${i + 1}. *${s.fromName}* owes *₹${s.amountRupees}* to *${s.toName}*`).join('\n') +
+            `\n\n`;
+        }
+        msg += `Portal: ${portalUrl}`;
+      } else {
+        const r = appState.roommates.find(x => x.id === targetId);
+        const name = r ? r.name.replace(/\s*\(You\)/i, '') : 'Roommate';
+        const userDebts = suggestions.filter(s => s.fromId === targetId);
+        if (userDebts.length > 0) {
+          msg = `💸 *ROOM NO 12 - Expense Reminder*\n` +
+                `Hey ${name}!\n` +
+                `Quick reminder regarding pending shared expense splits:\n` +
+                userDebts.map(d => `• ₹${d.amountRupees} to ${d.toName} (UPI: ${d.toUpi || 'on file'})`).join('\n') +
+                `\n\nPlease settle up when you get a chance:\n${portalUrl}`;
+        } else {
+          msg = `💸 *ROOM NO 12 - Shared Expenses*\n` +
+                `Hey ${name}! You are currently all settled up on shared expenses. 🎉\n` +
+                `Check portal: ${portalUrl}`;
+        }
+      }
+    } else if (activeWaReminderType === 'cleaning') {
+      const duties = Array.isArray(cleaningDutiesState) ? cleaningDutiesState : [];
+      if (targetId === 'group') {
+        msg = `🧹 *ROOM NO 12 - Sunday Cleaning Roster*\n` +
+              `━━━━━━━━━━━━━━━━━━━━━\n` +
+              (duties.length > 0
+                ? duties.map(d => `• ${d.duty_date}: *${d.assignee_name}* (${d.status.toUpperCase()})`).join('\n')
+                : `Roster will be generated soon.\n`) +
+              `\nPortal: ${portalUrl}`;
+      } else {
+        const r = appState.roommates.find(x => x.id === targetId);
+        const name = r ? r.name.replace(/\s*\(You\)/i, '') : 'Roommate';
+        const duty = duties.find(d => d.person_id === targetId && ['upcoming', 'in_progress', 'submitted', 'redo'].includes(d.status)) || duties.find(d => d.person_id === targetId);
+        const dateStr = duty ? duty.duty_date : 'this Sunday';
+        msg = `🧹 *ROOM NO 12 - Sunday Cleaning Reminder*\n` +
+              `Hey ${name}!\n` +
+              `Friendly reminder that *${dateStr}* is your turn for Sunday flat cleaning.\n\n` +
+              `Please complete the 7-point checklist and upload the clean room photo:\n` +
+              `${portalUrl}`;
+      }
+    }
+
+    previewBox.value = msg;
+  }
+
+  function handleSendWhatsAppFromModal() {
+    const sel = document.getElementById('waRecipientSelect');
+    const targetId = sel ? sel.value : 'group';
+    const text = document.getElementById('waMessageText').value;
+    if (!text) return;
+
+    let phone = '';
+    if (targetId !== 'group') {
+      const dir = roommatesDirectory.find(d => d.id === targetId);
+      if (dir && dir.phone) phone = dir.phone;
+    }
+
+    if (phone && phone.length === 10) phone = '91' + phone;
+
+    const waUrl = phone
+      ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+      : `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+
+    window.open(waUrl, '_blank');
+  }
 
 })();
